@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Webcam Document Scanner</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header>
+    <select id="camera" title="Camera"></select>
+    <button id="rotate" title="Rotate (R)">Rotate 0°</button>
+    <button id="loupe" title="Magnifier (L) — scroll to zoom">Loupe</button>
+    <select id="crop-mode" title="How to crop new captures (O)">
+      <option value="rect">Rectangle crop</option>
+      <option value="outline">Page outline</option>
+    </select>
+    <label id="lens-tools" class="lens" title="Lens correction: straightens lines that bow in or out" hidden>
+      Lens <input id="lens" type="range" min="-0.4" max="0.4" step="0.005" value="0" />
+    </label>
+    <button id="crop-reset" title="Clear the crop or outline for the next captures" hidden>Reset</button>
+    <span id="resolution" class="muted"></span>
+    <span class="spacer"></span>
+    <span id="status" class="muted"></span>
+    <button id="clear" disabled>Clear</button>
+    <button id="save" class="primary" disabled>Save PDF…</button>
+  </header>
+  <main>
+    <section id="stage">
+      <div id="viewport" class="viewport">
+        <div id="frame" class="frame"><canvas id="preview"></canvas></div>
+        <p id="message" hidden></p>
+      </div>
+      <div class="shutter-bar">
+        <button id="capture" title="Capture (Space)" aria-label="Capture page"></button>
+      </div>
+    </section>
+    <aside>
+      <div class="aside-bar">
+        <button id="crop-selected" title="Crop the selected pages (C)" disabled>Crop…</button>
+        <button id="select-all" title="Select all (⌘A)">Select all</button>
+      </div>
+      <ol id="pages"></ol>
+      <p id="empty" class="muted">
+        Drag on the preview to crop,<br />or choose Page outline to flatten.<br />
+        <kbd>Space</kbd> captures a page.<br />
+        <kbd>⌫</kbd> deletes the last one.
+      </p>
+    </aside>
+  </main>
+  <dialog id="viewer"><img alt="" /></dialog>
+  <dialog id="editor">
+    <header>
+      <span id="editor-title"></span>
+      <span class="spacer"></span>
+      <select id="editor-mode">
+        <option value="rect">Rectangle crop</option>
+        <option value="outline">Page outline</option>
+      </select>
+      <label id="editor-lens-tools" class="lens" title="Lens correction: straightens lines that bow in or out" hidden>
+        Lens <input id="editor-lens" type="range" min="-0.4" max="0.4" step="0.005" value="0" />
+      </label>
+      <button id="editor-preview" title="Show the result (P)">Preview</button>
+      <button id="editor-reset">Reset</button>
+      <button id="editor-cancel">Cancel</button>
+      <button id="editor-apply" class="primary">Crop</button>
+    </header>
+    <div id="editor-viewport" class="viewport">
+      <div id="editor-frame" class="frame"><img id="editor-img" alt="" draggable="false" /></div>
+    </div>
+  </dialog>
+  <video id="video" playsinline muted></video>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
