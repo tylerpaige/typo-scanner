@@ -34,8 +34,10 @@ interface Tile {
 }
 
 export interface IntakeHost {
-  /** `turn` is quarter turns clockwise, in degrees, for the page to be shown at. */
-  addPage(image: Blob, width: number, height: number, turn: number): Promise<void>;
+  /** `turn` is quarter turns clockwise, in degrees, for the page to be shown at. Resolves to the pages made. */
+  addPage(image: Blob, width: number, height: number, turn: number): Promise<object[]>;
+  /** Takes out pages `addPage` made; ones already gone are skipped. */
+  removePages(pages: object[]): void;
 }
 
 const GOOD_SCORE = 0.6;
@@ -47,6 +49,7 @@ const view = $("intake-view");
 const folderButton = $<HTMLButtonElement>("intake-folder");
 const pathLabel = $("intake-path");
 const importButton = $<HTMLButtonElement>("intake-import");
+const redoButton = $<HTMLButtonElement>("intake-redo");
 const perPageSelect = $<HTMLSelectElement>("intake-per-page");
 const autoInput = $<HTMLInputElement>("intake-auto");
 const rotateButton = $<HTMLButtonElement>("intake-rotate");
@@ -78,7 +81,7 @@ function store(key: string, value: string) {
 let host: IntakeHost;
 let active = false;
 let folder = load("scan-folder");
-let perPage = Number(load("scan-per-page")) || 2;
+let perPage = Number(load("scan-per-page")) || 1;
 let auto = load("scan-auto") !== "false";
 let turn = Number(load("scan-rotation")) || 0;
 
@@ -87,6 +90,9 @@ const seen = new Map<string, number>();
 let primed = false;
 let existing: ScanFile[] = [];
 const queue: { file: ScanFile; bulk: boolean }[] = [];
+/** The files of the last import, and the pages made from them, so it can be done over with other settings. */
+let imported: ScanFile[] = [];
+let importedPages: object[] = [];
 let reading = false;
 const waiting: Tile[] = [];
 let group: Tile[] = [];
@@ -163,6 +169,8 @@ function watch(path: string, importWhatsThere: boolean) {
   store("scan-folder", path);
   seen.clear();
   existing = [];
+  imported = [];
+  importedPages = [];
   primed = false;
   importOnPrime = importWhatsThere;
   poll();
@@ -176,11 +184,50 @@ folderButton.addEventListener("click", async () => {
 });
 
 function importExisting() {
+  imported = existing;
+  importedPages = [];
   queue.push(...existing.map((file) => ({ file, bulk: true })));
   existing = [];
   serial(intake);
 }
 importButton.addEventListener("click", importExisting);
+
+/** Takes back the pages the last import made and its scans still here, then imports the same files again. */
+function redoImport() {
+  // Stop the import under way after the file it's on; whatever it made is taken back below.
+  for (let i = queue.length - 1; i >= 0; i--) if (queue[i].bulk) queue.splice(i, 1);
+  serial(async () => {
+    const drop = (tiles: Tile[]) => {
+      const gone = tiles.filter((t) => t.bulk);
+      stitcher.drop(gone.map((t) => t.id));
+      gone.forEach((t) => t.preview.close());
+      return tiles.filter((t) => !t.bulk);
+    };
+    waiting.splice(0, waiting.length, ...drop(waiting));
+    group = drop(group);
+    selected = group.length - 1;
+    host.removePages(importedPages);
+    importedPages = [];
+    queue.push(...imported.map((file) => ({ file, bulk: true })));
+    await intake();
+  });
+}
+
+// Two clicks when it would take pages back, since there's no undo.
+let redoTimer: number | undefined;
+redoButton.addEventListener("click", () => {
+  if (importedPages.length && !redoButton.classList.contains("confirm")) {
+    redoButton.classList.add("confirm");
+    redoTimer = window.setTimeout(() => {
+      redoButton.classList.remove("confirm");
+      draw();
+    }, 3000);
+    return draw();
+  }
+  clearTimeout(redoTimer);
+  redoButton.classList.remove("confirm");
+  redoImport();
+});
 
 // ---- assembling pages ----
 
@@ -264,15 +311,17 @@ async function addPage() {
   if (group.length === 0) return;
   const note = reading ? null : group.length > 1 ? "Joining scans…" : "Adding page…";
   if (note) setNote(note);
+  let made: object[];
   if (group.length === 1) {
     // A page of one scan is that scan as it is: nothing to redraw or re-compress, and the turn is the page's own.
     const [tile] = group;
-    await host.addPage(tile.blob, tile.width, tile.height, turn);
+    made = await host.addPage(tile.blob, tile.width, tile.height, turn);
   } else {
     const g = outputTurn();
     const page = await stitcher.render(group.map(({ id, t }) => ({ id, t: compose(g, t) })));
-    await host.addPage(page.blob, page.width, page.height, 0);
+    made = await host.addPage(page.blob, page.width, page.height, 0);
   }
+  if (group.some((t) => t.bulk)) importedPages.push(...made);
   discard();
   if (note) setNote("");
 }
@@ -333,6 +382,11 @@ function draw() {
   pathLabel.title = folder ?? "";
   importButton.hidden = existing.length === 0;
   importButton.textContent = `Import ${existing.length} already there`;
+  redoButton.hidden = imported.length === 0;
+  redoButton.textContent = redoButton.classList.contains("confirm")
+    ? `Remove ${importedPages.length} page${importedPages.length === 1 ? "" : "s"} and redo?`
+    : `Redo import at ${perPage} per page`;
+  redoButton.title = `Take back the ${imported.length} imported scans and import them again with the settings as they are now`;
   perPageSelect.value = String(perPage);
   autoInput.checked = auto;
   rotateButton.textContent = `Rotate ${turn}°`;

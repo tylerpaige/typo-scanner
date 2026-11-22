@@ -432,6 +432,7 @@ async function addPage(
       }),
     ),
   );
+  return made;
 }
 
 async function capture() {
@@ -463,6 +464,7 @@ async function capture() {
 
 const intake = initIntake({
   addPage: (image, width, height, turn) => addPage(image, width, height, { kind: "rect", rect: FULL }, { turn }),
+  removePages: (made) => removePages(made as Page[]),
 });
 
 function setSource(source: string) {
