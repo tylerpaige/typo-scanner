@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { CropBox, fitFrame } from "./cropbox";
 import { openEditor, openSplitter, type EditablePage } from "./editor";
 import { FULL, clamp, isFull, rotateRect, type Rect } from "./geometry";
@@ -642,6 +643,12 @@ rangeInput.addEventListener("keydown", (e) => {
   }
 });
 
+function focusRange() {
+  setArea("pages");
+  rangeInput.focus();
+  rangeInput.select();
+}
+
 function renderSelectionTools() {
   const s = scope();
   rangeInput.classList.toggle("invalid", s === null);
@@ -726,6 +733,7 @@ function renderPages() {
   unsplitSelectedButton.hidden = !pages.some((p) => selected.has(p) && p.spread);
   unsplitSelectedButton.disabled = busy;
   renderSelectionTools();
+  syncMenu(spreads);
   resetClear();
   if (!busy) {
     const count = pages.length ? `${pages.length} page${pages.length === 1 ? "" : "s"}` : "";
@@ -928,10 +936,20 @@ clearButton.addEventListener("click", () => {
     clearTimer = window.setTimeout(resetClear, 3000);
     return;
   }
-  removePages([...pages]);
-  // A fresh start, so saving can't write these pages over the project that was open.
-  setProject(null);
+  startOver();
 });
+
+/** Clears the pages for a new project, so saving can't write them over the one that was open. */
+function startOver() {
+  removePages([...pages]);
+  setProject(null);
+}
+
+async function newProject() {
+  if (busy) return;
+  if (edited && pages.length && !(await invoke<boolean>("confirm_discard"))) return;
+  startOver();
+}
 
 // ---- projects and exporting ----
 
@@ -976,6 +994,21 @@ async function hold(job: () => Promise<string | null>, failure: string) {
 }
 
 /** Saves the pages, with everything needed to keep editing them, to the open project or (with `copy`, or if it's new) a file chosen now. */
+/** The project file's bytes, with everything needed to keep editing the pages. */
+const projectBytes = () => packProject(pages.map((p) => ({ ...p, thumb: p.thumbBlob })));
+
+/** The pages as a PDF. */
+const pdfBytes = async () =>
+  buildPdf(
+    await Promise.all(
+      pages.map(async (p) => ({
+        jpeg: new Uint8Array(await p.output.arrayBuffer()),
+        width: p.outWidth,
+        height: p.outHeight,
+      })),
+    ),
+  );
+
 const saveProject = (copy = false) =>
   pages.length > 0 &&
   hold(async () => {
@@ -986,7 +1019,7 @@ const saveProject = (copy = false) =>
         : projectPath;
     if (!path) return null;
     setStatus("Saving…");
-    await writeFile(path, await packProject(pages.map((p) => ({ ...p, thumb: p.thumbBlob }))));
+    await writeFile(path, await projectBytes());
     setProject(path);
     return `Saved ${fileName(path)}`;
   }, "Save failed");
@@ -1013,22 +1046,116 @@ const exportPdf = () =>
     const path = await invoke<string | null>("choose_save_path", { kind: "pdf", name: projectName() ?? "scan" });
     if (!path) return null;
     setStatus("Building PDF…");
-    const pdf = buildPdf(
-      await Promise.all(
-        pages.map(async (p) => ({
-          jpeg: new Uint8Array(await p.output.arrayBuffer()),
-          width: p.outWidth,
-          height: p.outHeight,
-        })),
-      ),
-    );
-    await writeFile(path, pdf);
+    await writeFile(path, await pdfBytes());
     return `Exported ${pages.length} pages to ${fileName(path)}`;
   }, "Export failed");
+
+const imageExtension = (blob: Blob) => (blob.type === "image/png" ? "png" : "jpg");
+
+/**
+ * Gathers everything into a new folder, as InDesign's Package does: the project, its PDF,
+ * each original photo or scan (named for the pages it makes), and each finished page.
+ */
+const packageProject = () =>
+  pages.length > 0 &&
+  hold(async () => {
+    setStatus("Choosing where to package…");
+    const folder = await invoke<string | null>("choose_package_path", { name: `${projectName() ?? "Untitled"} Folder` });
+    if (!folder) return null;
+    const name = fileName(folder).replace(/ Folder$/, "") || "Untitled";
+    await invoke("create_package", { path: folder });
+    const width = Math.max(3, String(pages.length).length);
+    const number = (i: number) => String(i + 1).padStart(width, "0");
+    for (const [i, page] of pages.entries()) {
+      setStatus(`Packaging page ${i + 1} of ${pages.length}…`);
+      await writeFile(`${folder}/Pages/${number(i)}.jpg`, new Uint8Array(await page.output.arrayBuffer()));
+    }
+    // Halves of a spread share their photo, which is named for the first and last pages it makes.
+    const made = new Map<Blob, number[]>();
+    pages.forEach((p, i) => made.set(p.original, [...(made.get(p.original) ?? []), i]));
+    for (const [original, at] of made) {
+      const label = at.length > 1 ? `${number(at[0])}-${number(at[at.length - 1])}` : number(at[0]);
+      await writeFile(`${folder}/Originals/${label}.${imageExtension(original)}`, new Uint8Array(await original.arrayBuffer()));
+    }
+    setStatus("Building PDF…");
+    await writeFile(`${folder}/${name}.pdf`, await pdfBytes());
+    setStatus("Saving the project…");
+    const project = `${folder}/${name}.${EXTENSION}`;
+    await writeFile(project, await projectBytes());
+    // An untitled project carries on as the packaged one, so its work counts as saved.
+    if (!projectPath) setProject(project);
+    return `Packaged ${pages.length} pages into ${fileName(folder)}`;
+  }, "Package failed");
 
 openButton.addEventListener("click", openProject);
 saveButton.addEventListener("click", () => saveProject());
 exportButton.addEventListener("click", exportPdf);
+
+// ---- menu ----
+
+const plural = (n: number, one: string, many: string) => (n > 1 ? `${n} ${many}` : one);
+
+let menuState = "";
+/** Turns the menu's items on and off, and counts pages in their titles, to match the buttons. */
+function syncMenu(spreads: number) {
+  const ready = !busy && rendering === 0;
+  const s = scope();
+  const state = {
+    enabled: {
+      new: !busy && (pages.length > 0 || projectPath !== null),
+      open: ready,
+      save: ready && pages.length > 0,
+      "save-as": ready && pages.length > 0,
+      export: ready && pages.length > 0,
+      package: ready && pages.length > 0,
+      crop: !cropSelectedButton.disabled,
+      split: !splitSelectedButton.disabled,
+      "rotate-cw": !rotateRightButton.disabled,
+      "rotate-ccw": !rotateLeftButton.disabled,
+      "select-even": !!s?.indexes.length,
+      "select-odd": !!s?.indexes.length,
+      "select-range": pages.length > 0,
+      "select-none": selected.size > 0,
+    },
+    titles: {
+      crop: `Crop ${plural(selected.size, "Page", "Pages")}…`,
+      split: `Split ${plural(spreads, "Page", "Pages")}…`,
+      "rotate-cw": `Rotate ${plural(selected.size, "Page", "Pages")} Clockwise`,
+      "rotate-ccw": `Rotate ${plural(selected.size, "Page", "Pages")} Counter-clockwise`,
+    },
+  };
+  const json = JSON.stringify(state);
+  if (json === menuState) return;
+  menuState = json;
+  invoke("set_menu_state", state).catch(() => {});
+}
+
+const menuActions: Record<string, () => unknown> = {
+  new: newProject,
+  open: openProject,
+  save: () => saveProject(),
+  "save-as": () => saveProject(true),
+  export: exportPdf,
+  package: packageProject,
+  crop: cropSelected,
+  split: splitSelected,
+  "rotate-cw": () => rotateSelected(1),
+  "rotate-ccw": () => rotateSelected(-1),
+  // ⌘A in a text field reaches here (the page leaves it alone), so there it selects the text.
+  "select-all": () =>
+    document.activeElement instanceof HTMLInputElement && document.activeElement.type === "text"
+      ? document.activeElement.select()
+      : selectIndexes(pages.map((_, i) => i)),
+  "select-even": () => selectParity("even"),
+  "select-odd": () => selectParity("odd"),
+  "select-range": focusRange,
+  "select-none": () => selectAll(false),
+};
+
+listen<string>("menu", (e) => {
+  if (document.querySelector("dialog[open]")) return; // the crop and split editors keep the pages still
+  menuActions[e.payload]?.();
+});
 
 // ---- keyboard ----
 
@@ -1064,11 +1191,8 @@ document.addEventListener("keydown", (e) => {
   if (cmd && e.code === "KeyA") {
     e.preventDefault();
     // ⌘A every page, ⌘⇧A the even ones and ⌘⌥A the odd (within the range, if there is one), ⌘⌃A the range itself.
-    if (e.metaKey && e.ctrlKey) {
-      setArea("pages");
-      rangeInput.focus();
-      rangeInput.select();
-    } else if (e.shiftKey) selectParity("even");
+    if (e.metaKey && e.ctrlKey) focusRange();
+    else if (e.shiftKey) selectParity("even");
     else if (e.altKey) selectParity("odd");
     else selectIndexes(pages.map((_, i) => i));
     return;

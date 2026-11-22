@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::UNIX_EPOCH;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::{PermissionKind, PermissionResponse};
-use tauri::{Manager, RunEvent, WindowEvent};
+use std::collections::HashMap;
+use tauri::menu::{Menu, MenuItem, MenuItemBuilder, SubmenuBuilder};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 /// Asks where to export a PDF (`kind` "pdf") or save a project (`kind` "project"),
@@ -40,8 +42,33 @@ fn has_extension(path: &Path, ext: &str) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
+/// Asks where to put a package (a new folder of the project, its PDF and its images),
+/// suggesting `name`. Returns the chosen path, or `None` if the dialog was cancelled.
+#[tauri::command]
+async fn choose_package_path(app: tauri::AppHandle, name: String) -> Result<Option<String>, String> {
+    let Some(picked) = app.dialog().file().set_file_name(name).blocking_save_file() else { return Ok(None) };
+    Ok(Some(picked.into_path().map_err(err)?.display().to_string()))
+}
+
+/// Makes a package's folder, with `Originals` and `Pages` inside. It must be new, so
+/// packaging never mixes with (or overwrites) files already there.
+#[tauri::command]
+fn create_package(path: String) -> Result<(), String> {
+    let path = Path::new(&path);
+    if path.exists() {
+        return Err(format!("{} already exists; choose another name", path.file_name().unwrap_or_default().to_string_lossy()));
+    }
+    for sub in ["Originals", "Pages"] {
+        std::fs::create_dir_all(path.join(sub)).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// What `write_file` may write: PDFs, projects, and (in packages) page images.
+const WRITABLE: &[&str] = &["pdf", PROJECT_EXTENSION, "jpg", "png"];
+
 /// Writes the raw request body to the path in the `path` header (percent-encoded), which
-/// must be a PDF or project. It goes to a temporary file first, so a failed save can't
+/// must be one of the `WRITABLE` kinds of file. It goes to a temporary file first, so a failed save can't
 /// leave a project half-written.
 #[tauri::command]
 async fn write_file(request: Request<'_>) -> Result<(), String> {
@@ -50,8 +77,8 @@ async fn write_file(request: Request<'_>) -> Result<(), String> {
     };
     let header = request.headers().get("path").ok_or("no path given")?.to_str().map_err(err)?;
     let path = std::path::PathBuf::from(percent_encoding::percent_decode_str(header).decode_utf8().map_err(err)?.into_owned());
-    if !has_extension(&path, "pdf") && !has_extension(&path, PROJECT_EXTENSION) {
-        return Err("can only write PDFs and projects".into());
+    if !WRITABLE.iter().any(|ext| has_extension(&path, ext)) {
+        return Err("can only write PDFs, projects and images".into());
     }
     let name = path.file_name().ok_or("no file name")?.to_string_lossy();
     let temp = path.with_file_name(format!(".{name}.saving"));
@@ -240,6 +267,105 @@ fn heic_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     bytes
 }
 
+/// The app's own menu items: id, title, and shortcut (shortcuts the page also handles
+/// reach the page first, so these mostly show them and catch clicks).
+const FILE_MENU: &[(&str, &str, &str)] = &[
+    ("new", "New Project", "CmdOrCtrl+N"),
+    ("open", "Open Project…", "CmdOrCtrl+O"),
+    ("save", "Save Project", "CmdOrCtrl+S"),
+    ("save-as", "Save As…", "CmdOrCtrl+Shift+S"),
+    ("export", "Export as PDF…", "CmdOrCtrl+E"),
+    ("package", "Package…", "CmdOrCtrl+Alt+Shift+P"),
+];
+const EDIT_MENU: &[(&str, &str, &str)] = &[
+    ("crop", "Crop Page…", "CmdOrCtrl+C"),
+    ("split", "Split Page…", "CmdOrCtrl+/"),
+    ("rotate-cw", "Rotate Page Clockwise", "CmdOrCtrl+R"),
+    ("rotate-ccw", "Rotate Page Counter-clockwise", "CmdOrCtrl+Shift+R"),
+];
+const SELECT_MENU: &[(&str, &str, &str)] = &[
+    ("select-all", "All", "CmdOrCtrl+A"),
+    ("select-even", "Even", "CmdOrCtrl+Shift+A"),
+    ("select-odd", "Odd", "CmdOrCtrl+Alt+A"),
+    ("select-range", "Range…", "CmdOrCtrl+Ctrl+A"),
+    ("select-none", "None", ""),
+];
+
+/// The app's menu items by id, so the page can turn them on and off and retitle them.
+struct MenuItems(HashMap<&'static str, MenuItem<Wry>>);
+
+fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, MenuItems)> {
+    let mut items = HashMap::new();
+    let mut make = |list: &[(&'static str, &str, &str)]| -> tauri::Result<Vec<MenuItem<Wry>>> {
+        list.iter()
+            .map(|&(id, text, accel)| {
+                let builder = MenuItemBuilder::with_id(id, text);
+                let item = if accel.is_empty() { builder } else { builder.accelerator(accel) }.build(app)?;
+                items.insert(id, item.clone());
+                Ok(item)
+            })
+            .collect()
+    };
+    let file = make(FILE_MENU)?;
+    let edit = make(EDIT_MENU)?;
+    let select = make(SELECT_MENU)?;
+
+    let app_menu = SubmenuBuilder::new(app, "Typo Scanner")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+    let file_menu = SubmenuBuilder::new(app, "File")
+        .items(&[&file[0], &file[1]])
+        .separator()
+        .close_window()
+        .items(&[&file[2], &file[3]])
+        .separator()
+        .items(&[&file[4], &file[5]])
+        .build()?;
+    // Cut, Copy and Paste come first so that, in the range field (where the page lets ⌘C
+    // through), ⌘C copies rather than crops.
+    let edit_menu = SubmenuBuilder::new(app, "Edit")
+        .cut()
+        .copy()
+        .paste()
+        .separator()
+        .items(&[&edit[0], &edit[1]])
+        .separator()
+        .items(&[&edit[2], &edit[3]])
+        .build()?;
+    let select_menu = SubmenuBuilder::new(app, "Select")
+        .items(&[&select[0], &select[1], &select[2], &select[3]])
+        .separator()
+        .item(&select[4])
+        .build()?;
+    let window_menu = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().fullscreen().build()?;
+    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &select_menu, &window_menu])?;
+    Ok((menu, MenuItems(items)))
+}
+
+/// Turns the app's menu items on or off, and retitles them, to suit the pages and selection.
+#[tauri::command]
+fn set_menu_state(items: tauri::State<MenuItems>, enabled: HashMap<String, bool>, titles: HashMap<String, String>) -> Result<(), String> {
+    for (id, on) in enabled {
+        if let Some(item) = items.0.get(id.as_str()) {
+            item.set_enabled(on).map_err(err)?;
+        }
+    }
+    for (id, title) in titles {
+        if let Some(item) = items.0.get(id.as_str()) {
+            item.set_text(title).map_err(err)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -250,6 +376,19 @@ pub fn run() {
             _ => PermissionResponse::Default,
         })
         .manage(Edited::default())
+        .setup(|app| {
+            let (menu, items) = build_menu(app)?;
+            app.set_menu(menu)?;
+            app.manage(items);
+            Ok(())
+        })
+        // The page does what each item says.
+        .on_menu_event(|app, event| {
+            let id = event.id().as_ref();
+            if app.state::<MenuItems>().0.contains_key(id) {
+                let _ = app.emit("menu", id);
+            }
+        })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let label = window.label().to_string();
@@ -265,10 +404,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             choose_save_path,
+            choose_package_path,
+            create_package,
             write_file,
             pick_project,
             read_project,
             set_document,
+            set_menu_state,
             confirm_discard,
             pick_folder,
             list_scans,
@@ -324,6 +466,16 @@ mod tests {
     /// A 4×2 image: left half red, right half blue.
     fn halves() -> image::RgbImage {
         image::RgbImage::from_fn(4, 2, |x, _| if x < 2 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) })
+    }
+
+    #[test]
+    fn makes_a_package_folder_only_once() {
+        let dir = test_dir("package");
+        let package = dir.join("Book Folder");
+        create_package(package.display().to_string()).unwrap();
+        assert!(package.join("Originals").is_dir() && package.join("Pages").is_dir());
+        assert!(create_package(package.display().to_string()).unwrap_err().contains("already exists"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
