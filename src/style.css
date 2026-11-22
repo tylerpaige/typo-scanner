@@ -146,6 +146,21 @@ button.on { background: var(--accent); border-color: var(--accent); color: white
   border-radius: 50%;
   background: rgba(120, 200, 255, 0.95);
 }
+.outlinebox .inside { fill: transparent; pointer-events: fill; cursor: move; }
+.outlinebox.adding .inside { cursor: copy; }
+.outlinebox .hint { fill: none; stroke: white; stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.outlinebox .hint-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 0 0 2px rgba(120, 200, 255, 0.95);
+  pointer-events: none;
+}
+.outlinebox .hint-dot[hidden] { display: none; }
+.outlinebox .handle.doomed { background: #e5484d; }
 .lens { display: inline-flex; align-items: center; gap: 6px; }
 .lens[hidden] { display: none; }
 .lens input { width: 110px; }

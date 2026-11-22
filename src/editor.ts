@@ -1,6 +1,6 @@
 import { CropBox, fitFrame } from "./cropbox";
 import { FULL } from "./geometry";
-import type { Crop, Outline } from "./outline";
+import { outlineFromRect, type Crop, type Outline } from "./outline";
 import { OutlineBox } from "./outlinebox";
 import { render } from "./render";
 import { CENTRE, type Split } from "./split";
@@ -270,7 +270,7 @@ $("editor-reset").addEventListener("click", () => {
   if (tool === "split") {
     splitBox.set(CENTRE);
   } else if (modeSelect.value === "outline") {
-    outlineBox.set({ ...outlineBox.outline, corners: [[0, 0], [1, 0], [1, 1], [0, 1]], bends: outlineBox.outline.bends.map((b) => b.map(() => 0)) });
+    outlineBox.set(outlineFromRect(FULL, outlineBox.outline.lens));
   } else {
     rectBox.set(FULL);
   }

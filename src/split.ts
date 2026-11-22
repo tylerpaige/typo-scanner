@@ -1,5 +1,5 @@
 import type { Rect } from "./geometry";
-import { BENDS, bendToward, type Crop, type Outline, type Pt } from "./outline";
+import { BENDS, addBend, type Crop, type Outline, type Pt } from "./outline";
 import { buildMapping } from "./warp";
 
 /**
@@ -64,13 +64,13 @@ function subOutline(
     (t) => at(left(1 - t), 1 - t),
   ];
   const norm = ([x, y]: Pt): Pt => [x / width, y / height];
-  const outline: Outline = {
+  let outline: Outline = {
     corners: edges.map((edge) => norm(edge(0))) as Outline["corners"],
-    bends: [],
+    bends: [[], [], [], []],
     lens,
   };
-  outline.bends = edges.map((edge, e) =>
-    Array.from({ length: BENDS }, (_, i) => bendToward(outline, e, i, edge((i + 1) / (BENDS + 1)), width, height)),
-  );
+  edges.forEach((edge, e) => {
+    for (let i = 1; i <= BENDS; i++) outline = addBend(outline, e, edge(i / (BENDS + 1)), width, height);
+  });
   return outline;
 }
