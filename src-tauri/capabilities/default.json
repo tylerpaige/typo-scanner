@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core events only; saving goes through the app's own command, which opens the save dialog itself",
+  "description": "Core events only; saving and opening go through the app's own commands, which open their dialogs themselves",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

@@ -7,6 +7,7 @@ import { Loupe } from "./loupe";
 import { outlineFromRect, rotateOutline, type Crop, type Outline } from "./outline";
 import { OutlineBox } from "./outlinebox";
 import { buildPdf } from "./pdf";
+import { EXTENSION, packProject, unpackProject } from "./project";
 import { byParity, describe, parseRange, span } from "./selection";
 import { render } from "./render";
 import { CENTRE, clampSplit, splitCrop, type Split } from "./split";
@@ -27,6 +28,7 @@ interface Page {
   outWidth: number;
   outHeight: number;
   thumb: string;
+  thumbBlob: Blob;
   /** Set on each half of a split spread, so the two can be joined again. */
   spread?: { pair: number; whole: Crop; turn: number };
 }
@@ -49,7 +51,9 @@ const lensInput = $<HTMLInputElement>("lens");
 const resolution = $("resolution");
 const status = $("status");
 const clearButton = $<HTMLButtonElement>("clear");
+const openButton = $<HTMLButtonElement>("open");
 const saveButton = $<HTMLButtonElement>("save");
+const exportButton = $<HTMLButtonElement>("export");
 const splitButton = $<HTMLButtonElement>("split");
 const cropSelectedButton = $<HTMLButtonElement>("crop-selected");
 const splitSelectedButton = $<HTMLButtonElement>("split-selected");
@@ -84,6 +88,10 @@ let rotation = Number(load("rotation")) || 0;
 let busy = false;
 let rendering = 0; // captures still being cropped
 let nextPair = 1;
+/** Where the open project is saved, if it has been. */
+let projectPath: string | null = null;
+/** Whether the pages have changed since the project was opened or saved. */
+let edited = false;
 
 // ---- settings ----
 
@@ -367,6 +375,7 @@ async function renderPage(page: Page, source?: ImageBitmap) {
     outWidth: result.width,
     outHeight: result.height,
     thumb: URL.createObjectURL(result.thumb),
+    thumbBlob: result.thumb,
   });
 }
 
@@ -381,6 +390,7 @@ const newPage = (original: Blob, width: number, height: number, turn: number, cr
   outWidth: width,
   outHeight: height,
   thumb: "",
+  thumbBlob: new Blob(),
 });
 
 /** The photo's size once turned, which is what its crop is measured against. */
@@ -409,6 +419,7 @@ async function addPage(
   }
   // Add them straight away so pages stay in the order they were taken.
   pages.push(...made);
+  markEdited();
   rendering += made.length;
   renderPages();
   pageList.lastElementChild?.scrollIntoView({ block: "nearest" });
@@ -478,6 +489,7 @@ function removePages(doomed: Page[]) {
     const i = pages.indexOf(page);
     if (i < 0) continue;
     pages.splice(i, 1);
+    markEdited();
     selected.delete(page);
     URL.revokeObjectURL(page.thumb);
   }
@@ -541,6 +553,7 @@ function shiftSelected(by: number) {
     const at = pages.flatMap((p, i) => (selected.has(p) ? [i] : []));
     if (step < 0 ? at[0] === 0 : at[at.length - 1] === pages.length - 1) break; // against the end
     for (const i of step < 0 ? at : at.reverse()) [pages[i], pages[i + step]] = [pages[i + step], pages[i]];
+    markEdited();
   }
   renderPages();
   if (cursor) pageList.children[pages.indexOf(cursor)]?.scrollIntoView({ block: "nearest" });
@@ -552,6 +565,7 @@ function movePages(moving: Page[], target: Page | null, after: boolean) {
   const rest = pages.filter((p) => !moving.includes(p));
   const at = target ? rest.indexOf(target) + (after ? 1 : 0) : rest.length;
   pages.splice(0, pages.length, ...rest.slice(0, at), ...moving, ...rest.slice(at));
+  markEdited();
   renderPages();
 }
 
@@ -702,7 +716,8 @@ function renderPages() {
   );
   empty.hidden = pages.length > 0;
   clearButton.disabled = busy || pages.length === 0;
-  saveButton.disabled = busy || rendering > 0 || pages.length === 0;
+  openButton.disabled = busy || rendering > 0;
+  saveButton.disabled = exportButton.disabled = busy || rendering > 0 || pages.length === 0;
   cropSelectedButton.disabled = rotateLeftButton.disabled = rotateRightButton.disabled = busy || selected.size === 0;
   cropSelectedButton.textContent = selected.size > 1 ? `Crop ${selected.size}…` : "Crop…";
   const spreads = pages.filter((p) => selected.has(p) && !p.spread).length;
@@ -752,6 +767,7 @@ function cropSelected() {
         if (!crop || JSON.stringify(crop) === JSON.stringify(page.crop)) continue; // left as it was
         setStatus(`${crop.kind === "outline" ? "Flattening" : "Cropping"} ${i + 1} of ${chosen.length}…`);
         page.crop = crop;
+        markEdited();
         try {
           await renderPage(page);
         } catch (e) {
@@ -789,6 +805,7 @@ function splitSelected() {
         spread,
       }));
       pages.splice(i, 1, ...halves);
+      markEdited();
       selected.delete(page);
       halves.forEach((h) => selected.add(h));
       if (anchor === page) anchor = halves[0];
@@ -812,6 +829,7 @@ function unsplitSelected() {
     // The halves may have been turned since; turn the whole page's crop to match.
     keep.crop = rotateCrop(whole, (keep.turn - turn) / 90);
     delete keep.spread;
+    markEdited();
     removePages(rest);
     selected.add(keep);
     rerender([keep], "join");
@@ -847,6 +865,7 @@ function rotatePages(chosen: Page[], quarters: number) {
     // The crop turns with the page, so it keeps framing the same part of it.
     page.crop = rotateCrop(page.crop, quarters);
   }
+  markEdited();
   rerender(chosen, "rotate");
   renderPages();
 }
@@ -910,20 +929,90 @@ clearButton.addEventListener("click", () => {
     return;
   }
   removePages([...pages]);
+  // A fresh start, so saving can't write these pages over the project that was open.
+  setProject(null);
 });
 
-// ---- saving ----
+// ---- projects and exporting ----
 
 function setStatus(text: string) {
   status.textContent = text;
 }
 
-async function save() {
-  if (busy || rendering > 0 || pages.length === 0) return;
+const fileName = (path: string) => path.split("/").pop()!;
+/** The open project's name, without its extension. */
+const projectName = () => projectPath && fileName(projectPath).replace(new RegExp(`\\.${EXTENSION}$`, "i"), "");
+
+function setProject(path: string | null, isEdited = false) {
+  projectPath = path;
+  edited = isEdited;
+  invoke("set_document", { name: projectName(), edited }).catch(() => {});
+}
+
+function markEdited() {
+  if (!edited) setProject(projectPath, true);
+}
+
+const writeFile = (path: string, bytes: Uint8Array) =>
+  invoke("write_file", bytes, { headers: { path: encodeURIComponent(path) } });
+
+/**
+ * Runs a save, export or open with the page tools held still, then reports how it went.
+ * `job` returns the status to show, or null if it was cancelled.
+ */
+async function hold(job: () => Promise<string | null>, failure: string) {
+  if (busy || rendering > 0) return;
   busy = true;
   renderPages();
-  setStatus("Building PDF…");
+  let outcome: string | null;
   try {
+    outcome = await job();
+  } catch (e) {
+    outcome = `${failure}: ${e}`;
+  }
+  busy = false;
+  renderPages();
+  if (outcome) setStatus(outcome);
+}
+
+/** Saves the pages, with everything needed to keep editing them, to the open project or (with `copy`, or if it's new) a file chosen now. */
+const saveProject = (copy = false) =>
+  pages.length > 0 &&
+  hold(async () => {
+    setStatus("Choosing where to save…");
+    const path =
+      copy || !projectPath
+        ? await invoke<string | null>("choose_save_path", { kind: "project", name: projectName() ?? "Untitled" })
+        : projectPath;
+    if (!path) return null;
+    setStatus("Saving…");
+    await writeFile(path, await packProject(pages.map((p) => ({ ...p, thumb: p.thumbBlob }))));
+    setProject(path);
+    return `Saved ${fileName(path)}`;
+  }, "Save failed");
+
+const openProject = () =>
+  hold(async () => {
+    const path = await invoke<string | null>("pick_project");
+    if (!path || (edited && !(await invoke<boolean>("confirm_discard")))) return null;
+    setStatus("Opening…");
+    const loaded = unpackProject(new Uint8Array(await invoke<ArrayBuffer>("read_project", { path })));
+    pages.forEach((p) => URL.revokeObjectURL(p.thumb));
+    pages.splice(0, pages.length, ...loaded.map((p) => ({ ...p, version: 0, thumb: URL.createObjectURL(p.thumb), thumbBlob: p.thumb })));
+    selected.clear();
+    anchor = cursor = heldSpan = null;
+    nextPair = Math.max(0, ...pages.map((p) => p.spread?.pair ?? 0)) + 1;
+    setProject(path);
+    return `Opened ${fileName(path)}`;
+  }, "Couldn't open the project");
+
+const exportPdf = () =>
+  pages.length > 0 &&
+  hold(async () => {
+    setStatus("Choosing where to export…");
+    const path = await invoke<string | null>("choose_save_path", { kind: "pdf", name: projectName() ?? "scan" });
+    if (!path) return null;
+    setStatus("Building PDF…");
     const pdf = buildPdf(
       await Promise.all(
         pages.map(async (p) => ({
@@ -933,28 +1022,33 @@ async function save() {
         })),
       ),
     );
-    setStatus("Choosing where to save…");
-    const path = await invoke<string | null>("save_pdf", pdf);
-    busy = false;
-    renderPages();
-    if (path) setStatus(`Saved ${pages.length} pages to ${path.split("/").pop()}`);
-  } catch (e) {
-    busy = false;
-    renderPages();
-    setStatus(`Save failed: ${e}`);
-  }
-}
+    await writeFile(path, pdf);
+    return `Exported ${pages.length} pages to ${fileName(path)}`;
+  }, "Export failed");
 
-saveButton.addEventListener("click", save);
+openButton.addEventListener("click", openProject);
+saveButton.addEventListener("click", () => saveProject());
+exportButton.addEventListener("click", exportPdf);
 
 // ---- keyboard ----
 
 document.addEventListener("keydown", (e) => {
   if (document.querySelector("dialog[open]")) return; // dialogs handle their own keys
   const cmd = e.metaKey || e.ctrlKey;
-  if (cmd && e.key === "s") {
+  if (cmd && e.code === "KeyS") {
     e.preventDefault();
-    save();
+    saveProject(e.shiftKey);
+    return;
+  }
+  if (cmd && e.code === "KeyO") {
+    e.preventDefault();
+    openProject();
+    return;
+  }
+  if (cmd && e.code === "KeyE") {
+    e.preventDefault();
+    exportPdf();
+    return;
   }
   if (cmd && e.code === "KeyR") {
     // ⌘R turns right and ⌘⇧R left, whichever part of the window you're working in.

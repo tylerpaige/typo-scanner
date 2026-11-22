@@ -4,29 +4,124 @@ use image::{DynamicImage, ImageDecoder};
 use serde::Serialize;
 use std::io::Cursor;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::UNIX_EPOCH;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::{PermissionKind, PermissionResponse};
-use tauri_plugin_dialog::DialogExt;
+use tauri::{Manager, RunEvent, WindowEvent};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
-/// Receives a finished PDF as the raw request body, asks where to put it, and
-/// writes it there. Returns the saved path, or `None` if the dialog was cancelled.
+/// Asks where to export a PDF (`kind` "pdf") or save a project (`kind` "project"),
+/// suggesting `name`. Returns the chosen path, or `None` if the dialog was cancelled.
 #[tauri::command]
-async fn save_pdf(app: tauri::AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
-    let InvokeBody::Raw(bytes) = request.body() else {
-        return Err("expected the PDF as raw bytes".into());
-    };
+async fn choose_save_path(app: tauri::AppHandle, kind: String, name: String) -> Result<Option<String>, String> {
+    let (label, ext) = file_kind(&kind)?;
     let picked = app
         .dialog()
         .file()
-        .add_filter("PDF", &["pdf"])
-        .set_file_name("scan.pdf")
+        .add_filter(label, &[ext])
+        .set_file_name(format!("{name}.{ext}"))
         .blocking_save_file();
     let Some(picked) = picked else { return Ok(None) };
-    let path = picked.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(Some(path.display().to_string()))
+    Ok(Some(picked.into_path().map_err(err)?.display().to_string()))
+}
+
+fn file_kind(kind: &str) -> Result<(&'static str, &'static str), String> {
+    match kind {
+        "pdf" => Ok(("PDF", "pdf")),
+        "project" => Ok(("Typo Scanner Project", PROJECT_EXTENSION)),
+        _ => Err(format!("unknown kind of file: {kind}")),
+    }
+}
+
+const PROJECT_EXTENSION: &str = "typoscan";
+
+fn has_extension(path: &Path, ext: &str) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// Writes the raw request body to the path in the `path` header (percent-encoded), which
+/// must be a PDF or project. It goes to a temporary file first, so a failed save can't
+/// leave a project half-written.
+#[tauri::command]
+async fn write_file(request: Request<'_>) -> Result<(), String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected the file as raw bytes".into());
+    };
+    let header = request.headers().get("path").ok_or("no path given")?.to_str().map_err(err)?;
+    let path = std::path::PathBuf::from(percent_encoding::percent_decode_str(header).decode_utf8().map_err(err)?.into_owned());
+    if !has_extension(&path, "pdf") && !has_extension(&path, PROJECT_EXTENSION) {
+        return Err("can only write PDFs and projects".into());
+    }
+    let name = path.file_name().ok_or("no file name")?.to_string_lossy();
+    let temp = path.with_file_name(format!(".{name}.saving"));
+    std::fs::write(&temp, bytes).and_then(|_| std::fs::rename(&temp, &path)).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        e.to_string()
+    })
+}
+
+/// Asks which project to open.
+#[tauri::command]
+async fn pick_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let picked = app.dialog().file().add_filter("Typo Scanner Project", &[PROJECT_EXTENSION]).blocking_pick_file();
+    let Some(picked) = picked else { return Ok(None) };
+    Ok(Some(picked.into_path().map_err(err)?.display().to_string()))
+}
+
+#[tauri::command]
+async fn read_project(path: String) -> Result<Response, String> {
+    let path = Path::new(&path);
+    if !has_extension(path, PROJECT_EXTENSION) {
+        return Err("not a Typo Scanner project".into());
+    }
+    std::fs::read(path).map(Response::new).map_err(err)
+}
+
+/// Whether the open pages have changes that aren't saved, so closing can ask first.
+#[derive(Default)]
+struct Edited(AtomicBool);
+
+/// Shows the project's name in the title bar, and remembers whether it has unsaved changes.
+#[tauri::command]
+fn set_document(window: tauri::Window, edited_state: tauri::State<Edited>, name: Option<String>, edited: bool) -> Result<(), String> {
+    edited_state.0.store(edited, Ordering::Relaxed);
+    let title = match (name, edited) {
+        (Some(name), true) => format!("{name} — Edited"),
+        (Some(name), false) => name,
+        (None, true) => "Untitled — Edited".into(),
+        (None, false) => "Typo Scanner".into(),
+    };
+    window.set_title(&title).map_err(err)
+}
+
+fn discard_dialog(app: &tauri::AppHandle) -> tauri_plugin_dialog::MessageDialogBuilder<tauri::Wry> {
+    app.dialog()
+        .message("Your changes to these pages haven't been saved.")
+        .title("Discard unsaved changes?")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom("Discard Changes".into(), "Cancel".into()))
+}
+
+/// Asks before throwing away unsaved changes (to open another project).
+#[tauri::command]
+async fn confirm_discard(app: tauri::AppHandle) -> bool {
+    discard_dialog(&app).blocking_show()
+}
+
+/// Asks before closing or quitting with unsaved changes; returns whether it's holding off to ask.
+fn hold_for_unsaved(app: &tauri::AppHandle, then: impl FnOnce(&tauri::AppHandle) + Send + 'static) -> bool {
+    if !app.state::<Edited>().0.load(Ordering::Relaxed) {
+        return false;
+    }
+    let app = app.clone();
+    discard_dialog(&app.clone()).show(move |discard| {
+        if discard {
+            app.state::<Edited>().0.store(false, Ordering::Relaxed);
+            then(&app);
+        }
+    });
+    true
 }
 
 /// Asks for the folder the scanner saves into.
@@ -154,9 +249,41 @@ pub fn run() {
             PermissionKind::Camera => PermissionResponse::Allow,
             _ => PermissionResponse::Default,
         })
-        .invoke_handler(tauri::generate_handler![save_pdf, pick_folder, list_scans, read_scan])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .manage(Edited::default())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let label = window.label().to_string();
+                let held = hold_for_unsaved(window.app_handle(), move |app| {
+                    if let Some(w) = app.get_webview_window(&label) {
+                        let _ = w.close();
+                    }
+                });
+                if held {
+                    api.prevent_close();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            choose_save_path,
+            write_file,
+            pick_project,
+            read_project,
+            set_document,
+            confirm_discard,
+            pick_folder,
+            list_scans,
+            read_scan
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // ⌘Q: ask about unsaved changes, as closing the window does.
+            if let RunEvent::ExitRequested { api, code: None, .. } = event {
+                if hold_for_unsaved(app, |app| app.exit(0)) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

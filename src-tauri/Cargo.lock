@@ -3982,6 +3982,7 @@ name = "typo-scanner"
 version = "0.1.0"
 dependencies = [
  "image",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tauri",
