@@ -5,6 +5,9 @@ import { buildMapping, type Mapping } from "./warp";
 const SVG = "http://www.w3.org/2000/svg";
 const GRID = 8;
 
+/** A point the keyboard can move: a corner, or bend point `index` of edge `edge`. */
+export type Anchor = { corner: number } | { edge: number; index: number };
+
 /**
  * The page outline laid over `host`, which should be exactly the size of the image beneath.
  * Drag the corners to fix perspective, the points along each edge to follow a curl
@@ -32,6 +35,8 @@ export class OutlineBox {
   /** The bend point under the pointer, if any. */
   private hoveredBend: { edge: number; index: number; alt: boolean } | null = null;
   outline: Outline = outlineFromRect({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+  /** The point the keyboard moves, if any. */
+  active: Anchor | null = null;
   /** Called when a drag finishes. */
   onChange?: (outline: Outline) => void;
 
@@ -132,6 +137,37 @@ export class OutlineBox {
       this.bends[e].forEach((el, i) => place(el, pts[i + 1]));
     });
     this.showHints();
+    this.setActive(this.active);
+  }
+
+  /** Every point, clockwise from the top-left corner: each corner, then the bends along the edge after it. */
+  anchors(): Anchor[] {
+    return this.outline.bends.flatMap((row, e): Anchor[] => [{ corner: e }, ...row.map((_, index) => ({ edge: e, index }))]);
+  }
+
+  setActive(anchor: Anchor | null) {
+    // A bend point that's since been removed can't stay active.
+    if (anchor && "edge" in anchor && anchor.index >= this.outline.bends[anchor.edge].length) anchor = null;
+    this.active = anchor;
+    const el = anchor && ("corner" in anchor ? this.corners[anchor.corner] : this.bends[anchor.edge][anchor.index]);
+    [...this.corners, ...this.bends.flat()].forEach((h) => h.classList.toggle("kb", h === el));
+  }
+
+  /** Moves the active point by (dx, dy), as fractions of the image; a bend point only moves across its edge. */
+  nudge(dx: number, dy: number) {
+    const a = this.active;
+    if (!a) return;
+    if ("corner" in a) {
+      const corners = [...this.outline.corners] as Outline["corners"];
+      const [x, y] = corners[a.corner];
+      corners[a.corner] = [clamp(x + dx, 0, 1), clamp(y + dy, 0, 1)];
+      this.set({ ...this.outline, corners });
+    } else {
+      const [x, y] = edgePoints(this.outline, this.width, this.height)[a.edge][a.index + 1];
+      const bends = this.outline.bends.map((b) => [...b]);
+      bends[a.edge][a.index] = bendToward(this.outline, a.edge, a.index, [x + dx * this.width, y + dy * this.height], this.width, this.height);
+      this.set({ ...this.outline, bends });
+    }
   }
 
   /** Makes a handle for each bend point, when the number of them has changed. */

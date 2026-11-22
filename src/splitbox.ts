@@ -1,5 +1,5 @@
 import type { Crop, Pt } from "./outline";
-import { CENTRE, clampSplit, type Split } from "./split";
+import { CENTRE, MIN_SIDE, clampSplit, type Split } from "./split";
 import { buildMapping } from "./warp";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -20,6 +20,8 @@ export class SplitBox {
   private crop: Crop = { kind: "rect", rect: { x: 0, y: 0, w: 1, h: 1 } };
   private at: (u: number, v: number) => Pt = (u, v) => [u, v];
   split: Split = CENTRE;
+  /** The part the keyboard moves, if any: an end, or the whole line. */
+  active: "top" | "bottom" | "line" | null = null;
   /** Called when a drag finishes. */
   onChange?: (split: Split) => void;
 
@@ -83,6 +85,25 @@ export class SplitBox {
     place(this.ends.top, pts[0]);
     place(this.ends.middle, pts[12]);
     place(this.ends.bottom, pts[24]);
+  }
+
+  setActive(part: SplitBox["active"]) {
+    this.active = part;
+    this.ends.top.classList.toggle("kb", part === "top");
+    this.ends.bottom.classList.toggle("kb", part === "bottom");
+    this.el.classList.toggle("kb-line", part === "line");
+  }
+
+  /** Moves the active part across the page by `du` (a fraction of its width). */
+  nudge(du: number) {
+    const { top, bottom } = this.split;
+    if (this.active === "top") this.set({ top: top + du, bottom });
+    else if (this.active === "bottom") this.set({ top, bottom: bottom + du });
+    else if (this.active === "line") {
+      // Stop at the edge, rather than bending the line against it.
+      const d = Math.min(1 - MIN_SIDE - Math.max(top, bottom), Math.max(MIN_SIDE - Math.min(top, bottom), du));
+      this.set({ top: top + d, bottom: bottom + d });
+    }
   }
 
   /** The point across the page, at height `v`, that's nearest pixel `p`. */

@@ -74,6 +74,9 @@ const viewer = $<HTMLDialogElement>("viewer");
 const pages: Page[] = [];
 const selected = new Set<Page>();
 let anchor: Page | null = null; // where a shift-click range starts
+let cursor: Page | null = null; // where the arrow keys are, the moving end of a ⇧-arrow range
+/** Pages being dragged to a new place in the list. */
+let dragging: Page[] = [];
 /** The span the selection buttons last chose from; kept so Odd then Even cover the same pages. */
 let heldSpan: Page[] | null = null;
 let stream: MediaStream | null = null;
@@ -496,8 +499,80 @@ function select(page: Page, e: MouseEvent) {
     selected.add(page);
     anchor = page;
   }
+  cursor = page;
   renderPages();
 }
+
+// ---- moving about the pages from the keyboard ----
+
+/** How many thumbnails fit across the list as it's laid out now. */
+function columns() {
+  const items = [...pageList.children] as HTMLElement[];
+  const top = items[0]?.offsetTop;
+  return Math.max(1, items.filter((li) => li.offsetTop === top).length);
+}
+
+/** Moves the cursor `by` pages; with `extend`, selects from the anchor to there, else just there. */
+function moveCursor(by: number, extend: boolean) {
+  if (!pages.length) return;
+  heldSpan = null;
+  const at = cursor ? pages.indexOf(cursor) : -1;
+  // With nothing to start from, the first arrow press lands on the first page.
+  const next = at < 0 || !selected.size ? pages[0] : pages[Math.min(pages.length - 1, Math.max(0, at + by))];
+  if (extend && anchor && selected.size) {
+    const [a, b] = [pages.indexOf(anchor), pages.indexOf(next)].sort((m, n) => m - n);
+    selected.clear();
+    pages.slice(a, b + 1).forEach((p) => selected.add(p));
+  } else {
+    selected.clear();
+    selected.add(next);
+    anchor = next;
+  }
+  cursor = next;
+  renderPages();
+  pageList.children[pages.indexOf(next)]?.scrollIntoView({ block: "nearest" });
+}
+
+/** Moves the selected pages `by` places in the list, keeping any gaps between them. */
+function shiftSelected(by: number) {
+  if (busy || !selected.size) return;
+  const step = Math.sign(by);
+  for (let n = 0; n < Math.abs(by); n++) {
+    const at = pages.flatMap((p, i) => (selected.has(p) ? [i] : []));
+    if (step < 0 ? at[0] === 0 : at[at.length - 1] === pages.length - 1) break; // against the end
+    for (const i of step < 0 ? at : at.reverse()) [pages[i], pages[i + step]] = [pages[i + step], pages[i]];
+  }
+  renderPages();
+  if (cursor) pageList.children[pages.indexOf(cursor)]?.scrollIntoView({ block: "nearest" });
+}
+
+/** Puts `moving` (in their present order) just before or after `target`. */
+function movePages(moving: Page[], target: Page | null, after: boolean) {
+  if (busy || !moving.length || (target && moving.includes(target))) return;
+  const rest = pages.filter((p) => !moving.includes(p));
+  const at = target ? rest.indexOf(target) + (after ? 1 : 0) : rest.length;
+  pages.splice(0, pages.length, ...rest.slice(0, at), ...moving, ...rest.slice(at));
+  renderPages();
+}
+
+function clearDropMarks() {
+  pageList.querySelectorAll(".drop-before, .drop-after").forEach((li) => li.classList.remove("drop-before", "drop-after"));
+}
+
+// Dropping past the last page (not in the gaps between pages) puts the pages at the end.
+const pastEnd = (e: DragEvent) => {
+  const last = pageList.lastElementChild?.getBoundingClientRect();
+  return !!last && e.target === pageList && (e.clientY > last.bottom || (e.clientY >= last.top && e.clientX > last.right));
+};
+pageList.addEventListener("dragover", (e) => {
+  if (dragging.length && pastEnd(e)) e.preventDefault();
+});
+pageList.addEventListener("drop", (e) => {
+  if (!pastEnd(e)) return;
+  e.preventDefault();
+  movePages(dragging, null, true);
+  dragging = [];
+});
 
 /**
  * The pages the selection buttons choose from: the typed range; else, with two or more
@@ -518,6 +593,7 @@ function selectIndexes(indexes: number[], from?: Page[]) {
   selected.clear();
   indexes.forEach((i) => selected.add(pages[i]));
   anchor = pages[indexes[0]] ?? null;
+  cursor = anchor;
   heldSpan = from ?? null;
   renderPages();
 }
@@ -542,6 +618,9 @@ rangeInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
     selectAll();
+    // Back to the pages, so the keys act on what's now selected (⌘C, ⌘/, arrows…).
+    rangeInput.blur();
+    setArea("pages");
   } else if (e.key === "Escape") {
     rangeInput.value = "";
     rangeInput.blur();
@@ -573,9 +652,40 @@ function renderPages() {
     ...pages.map((page, i) => {
       const li = document.createElement("li");
       li.classList.toggle("selected", selected.has(page));
+      li.classList.toggle("cursor", page === cursor && selected.size > 1);
+      li.draggable = true;
+      li.addEventListener("dragstart", (e) => {
+        // Dragging a selected page brings the rest of the selection along.
+        dragging = selected.has(page) ? pages.filter((p) => selected.has(p)) : [page];
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer?.setData("text/plain", String(i + 1));
+      });
+      li.addEventListener("dragend", () => {
+        dragging = [];
+        clearDropMarks();
+      });
+      // Which half of the thumbnail the pointer is over says which side to drop on.
+      const after = (e: DragEvent) => {
+        const r = li.getBoundingClientRect();
+        return e.clientX > r.left + r.width / 2;
+      };
+      li.addEventListener("dragover", (e) => {
+        if (!dragging.length || dragging.includes(page)) return;
+        e.preventDefault();
+        clearDropMarks();
+        li.classList.add(after(e) ? "drop-after" : "drop-before");
+      });
+      li.addEventListener("dragleave", () => li.classList.remove("drop-before", "drop-after"));
+      li.addEventListener("drop", (e) => {
+        e.preventDefault();
+        clearDropMarks();
+        movePages(dragging, page, after(e));
+        dragging = [];
+      });
       const img = document.createElement("img");
       if (page.thumb) img.src = page.thumb;
-      img.title = "Click to select · double-click to view";
+      img.draggable = false;
+      img.title = "Click to select · double-click to view · drag to move";
       img.addEventListener("click", (e) => select(page, e));
       img.addEventListener("dblclick", () => openViewer(page));
       const num = document.createElement("span");
@@ -857,9 +967,35 @@ document.addEventListener("keydown", (e) => {
   }
   // Typing in a text field: leave its keys alone (⌘A selects its text, Space types a space).
   if (e.target instanceof HTMLInputElement && e.target.type === "text") return;
-  if (cmd && e.key === "a") {
+  if (cmd && e.code === "KeyA") {
     e.preventDefault();
-    selectIndexes(pages.map((_, i) => i));
+    // ⌘A every page, ⌘⇧A the even ones and ⌘⌥A the odd (within the range, if there is one), ⌘⌃A the range itself.
+    if (e.metaKey && e.ctrlKey) {
+      setArea("pages");
+      rangeInput.focus();
+      rangeInput.select();
+    } else if (e.shiftKey) selectParity("even");
+    else if (e.altKey) selectParity("odd");
+    else selectIndexes(pages.map((_, i) => i));
+    return;
+  }
+  if (cmd && e.code === "KeyC") {
+    e.preventDefault();
+    cropSelected();
+    return;
+  }
+  if (cmd && e.code === "Slash") {
+    e.preventDefault();
+    splitSelected();
+    return;
+  }
+  const arrow = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns(), ArrowDown: columns() }[e.key];
+  if (arrow && area === "pages" && !(e.target instanceof HTMLSelectElement)) {
+    // In the page list: arrows move about, ⇧ selects as it goes, ⌘ moves the selected pages.
+    e.preventDefault();
+    if (cmd) shiftSelected(arrow);
+    else moveCursor(arrow, e.shiftKey);
+    return;
   }
   if (cmd || e.altKey || e.target instanceof HTMLSelectElement) return;
   const camera = sourceSelect.value === "camera";

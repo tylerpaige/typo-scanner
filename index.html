@@ -77,21 +77,21 @@
       <div id="sidebar-resizer" title="Drag to resize · double-click to reset"></div>
       <div class="aside-bar">
         <div class="row">
-          <button id="crop-selected" title="Crop or flatten the selected pages (C)" disabled>Crop…</button>
-          <button id="split-selected" title="Split the selected spreads into two pages each" disabled>Split…</button>
+          <button id="crop-selected" title="Crop or flatten the selected pages (⌘C)" disabled>Crop…</button>
+          <button id="split-selected" title="Split the selected spreads into two pages each (⌘/)" disabled>Split…</button>
           <button id="unsplit-selected" title="Join split pages back into their spreads" hidden>Unsplit</button>
           <button id="rotate-left" class="icon" title="Rotate the selected pages left (⌘⇧R)" aria-label="Rotate left" disabled>⟲</button>
           <button id="rotate-right" class="icon" title="Rotate the selected pages right (⌘R)" aria-label="Rotate right" disabled>⟳</button>
           <span id="selection-count" class="muted"></span>
         </div>
         <div class="row segmented" role="group" aria-label="Select pages">
-          <button id="select-all" title="Select every page in the range (⌘A)">All</button>
-          <button id="select-odd" title="Select the odd-numbered pages in the range">Odd</button>
-          <button id="select-even" title="Select the even-numbered pages in the range">Even</button>
+          <button id="select-all" title="Select every page in the range (⌘A selects every page)">All</button>
+          <button id="select-odd" title="Select the odd-numbered pages in the range (⌘⌥A)">Odd</button>
+          <button id="select-even" title="Select the even-numbered pages in the range (⌘⇧A)">Even</button>
           <button id="select-none" title="Select nothing (Esc)">None</button>
         </div>
         <input id="select-range" type="text" placeholder="Range, e.g. 3-12, 15" spellcheck="false" autocomplete="off"
-          title="Pages to choose from. Leave empty to use the span of the current selection, or every page." />
+          title="Pages to choose from (⌘⌃A). Leave empty to use the span of the current selection, or every page." />
         <p id="select-scope" class="muted"></p>
       </div>
       <ol id="pages"></ol>
@@ -114,10 +114,10 @@
       <label id="editor-lens-tools" class="lens" title="Lens correction: straightens lines that bow in or out" hidden>
         Lens <input id="editor-lens" type="range" min="-0.4" max="0.4" step="0.005" value="0" />
       </label>
-      <button id="editor-preview" title="Show the result (P)">Preview</button>
-      <button id="editor-reset">Reset</button>
-      <button id="editor-cancel">Cancel</button>
-      <button id="editor-apply" class="primary">Crop</button>
+      <button id="editor-preview" title="Show the result (⌘P)">Preview</button>
+      <button id="editor-reset" title="Start the crop or split over (⌘⇧R)">Reset</button>
+      <button id="editor-cancel" title="Close without changing anything (Esc)">Cancel</button>
+      <button id="editor-apply" class="primary" title="Apply (⌘↩)">Crop</button>
     </header>
     <div class="editor-body">
       <div id="editor-viewport" class="viewport">
@@ -125,7 +125,7 @@
       </div>
       <aside id="editor-sidebar">
         <div class="row">
-          <button id="editor-new-group" title="Put the picked pages in a group of their own, to adjust separately">New group</button>
+          <button id="editor-new-group" title="Put the picked pages in a group of their own, to adjust separately (⌘G; ⌘↑ ⌘↓ move them between groups)">New group</button>
           <button id="editor-remove" title="Leave the picked pages out of this edit (⌫)">Remove</button>
           <span id="editor-picked" class="muted"></span>
         </div>

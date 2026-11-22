@@ -1,6 +1,7 @@
 import { FULL, clamp, dragRect, isFull, type DragMode, type Rect } from "./geometry";
 
-const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+/** The handles, clockwise from the top-left. */
+export const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 /**
  * A crop rectangle laid over `host`, which should be exactly the size of the image beneath.
@@ -10,6 +11,8 @@ export class CropBox {
   readonly el = document.createElement("div");
   private readonly box = document.createElement("div");
   rect: Rect = FULL;
+  /** The handle the keyboard moves, by its edges ("nw", "e", …), if any. */
+  active: string | null = null;
   /** Called when a drag finishes. */
   onChange?: (rect: Rect) => void;
 
@@ -37,6 +40,16 @@ export class CropBox {
       height: `${rect.h * 100}%`,
     });
     this.el.classList.toggle("full", isFull(rect));
+  }
+
+  setActive(edges: string | null) {
+    this.active = edges;
+    this.box.querySelectorAll<HTMLElement>(".handle").forEach((h) => h.classList.toggle("kb", h.dataset.edges === edges));
+  }
+
+  /** Moves the active handle by (dx, dy), as fractions of the image. */
+  nudge(dx: number, dy: number) {
+    if (this.active) this.set(dragRect(this.rect, { kind: "resize", edges: this.active }, 0, 0, dx, dy));
   }
 
   private drag(down: PointerEvent) {

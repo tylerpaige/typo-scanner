@@ -324,6 +324,20 @@ aside {
   align-content: start;
 }
 #pages li { position: relative; }
+/* Where dragged pages will land. */
+#pages li.drop-before::before, #pages li.drop-after::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+#pages li.drop-before::before { left: -7px; }
+#pages li.drop-after::before { right: -7px; }
+/* The end of a selection the arrow keys move. */
+#sidebar.active #pages li.cursor img { outline-style: dashed; }
 #pages img {
   display: block;
   width: 100%;
@@ -386,6 +400,13 @@ kbd {
 }
 #editor[open] { display: flex; flex-direction: column; }
 .editor-body { flex: 1; display: flex; min-height: 0; }
+/* Which part of the editor the keyboard is working in (⌘E, ⌘L, ⌘B). */
+#editor-viewport:focus, #editor-sidebar:focus, #editor > header:focus { outline: none; }
+#editor-viewport:focus-visible, #editor-viewport:focus { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
+#editor-sidebar:focus-within { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent); }
+/* The point the keyboard moves. */
+.handle.kb { box-shadow: 0 0 0 3px #ff9f1a; z-index: 1; }
+.splitbox.kb-line .gutter { stroke-width: 4; }
 .editor-body .viewport { min-width: 0; }
 #editor-sidebar {
   width: 236px;

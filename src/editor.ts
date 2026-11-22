@@ -1,7 +1,7 @@
-import { CropBox, fitFrame } from "./cropbox";
+import { CropBox, HANDLES, fitFrame } from "./cropbox";
 import { FULL } from "./geometry";
 import { outlineFromRect, type Crop, type Outline } from "./outline";
-import { OutlineBox } from "./outlinebox";
+import { OutlineBox, type Anchor } from "./outlinebox";
 import { render } from "./render";
 import { CENTRE, type Split } from "./split";
 import { SplitBox } from "./splitbox";
@@ -21,6 +21,8 @@ export interface EditablePage {
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const dialog = $<HTMLDialogElement>("editor");
 const title = $("editor-title");
+const toolbar = dialog.querySelector("header")!;
+const resetButton = $<HTMLButtonElement>("editor-reset");
 const viewport = $("editor-viewport");
 const frame = $("editor-frame");
 const img = $<HTMLImageElement>("editor-img");
@@ -38,7 +40,8 @@ const rectBox = new CropBox(frame);
 const outlineBox = new OutlineBox(frame);
 const splitBox = new SplitBox(frame);
 rectBox.onChange = outlineBox.onChange = splitBox.onChange = () => commit();
-dialog.tabIndex = -1;
+// The three parts the keyboard works in (⌘E, ⌘L, ⌘B), each focusable as a whole.
+dialog.tabIndex = viewport.tabIndex = sidebar.tabIndex = toolbar.tabIndex = -1;
 
 /** A crop, or (when splitting) where the gutter runs. */
 type Shape = Crop | Split;
@@ -109,9 +112,13 @@ function begin(selected: EditablePage[], shapes: Shape[]) {
   pickAnchor = 0;
   previewing = false;
   sidebar.hidden = selected.length < 2;
+  rectBox.setActive(null);
+  outlineBox.setActive(null);
+  splitBox.setActive(null);
+  disarm();
   dialog.showModal();
-  // Otherwise the first control takes focus, and it would swallow the shortcut keys.
-  dialog.focus();
+  // Start in the editor itself; otherwise the first control takes focus and swallows the keys.
+  viewport.focus();
   show(0);
 }
 
@@ -211,6 +218,7 @@ function dropTarget(el: HTMLElement, onDrop: (ids: number[]) => void) {
 }
 
 function pick(i: number, e: MouseEvent) {
+  disarm();
   if (e.shiftKey) {
     const seq = order();
     const [a, b] = [seq.indexOf(pickAnchor), seq.indexOf(i)].sort((m, n) => m - n);
@@ -273,8 +281,53 @@ function settle(moved: number[]) {
   show(index);
 }
 
+/** Moves the chosen pages to the group before or after theirs; past the first or last, into a new one there. */
+function shiftGroup(by: -1 | 1) {
+  const ids = chosenPages();
+  const from = groupOf[index];
+  if (!ids.length || !from) return;
+  const target = groups[groups.indexOf(from) + by];
+  if (target) return moveTo(ids, target);
+  // Already a group of their own at the end: nowhere further to go.
+  if (pages.every((_, i) => (groupOf[i] === from) === ids.includes(i))) return;
+  const group: Group = { shared: from.shared };
+  if (by < 0) groups.unshift(group);
+  else groups.push(group);
+  moveTo(ids, group);
+}
+
+// ---- buttons that ask first ----
+
+let armed: { button: HTMLButtonElement; text: string; timer: number } | null = null;
+
+/** The first press turns the button into a red "…?" for three seconds; a second press within them does it. */
+function confirmFirst(button: HTMLButtonElement, question: string, action: () => void) {
+  if (armed?.button === button) {
+    disarm();
+    action();
+    return;
+  }
+  disarm();
+  armed = { button, text: button.textContent ?? "", timer: window.setTimeout(disarm, 3000) };
+  button.textContent = question;
+  button.classList.add("confirm");
+}
+
+function disarm() {
+  if (!armed) return;
+  clearTimeout(armed.timer);
+  armed.button.textContent = armed.text;
+  armed.button.classList.remove("confirm");
+  armed = null;
+}
+
+const removeChosen = () => {
+  const ids = chosenPages();
+  if (ids.length) confirmFirst(removeButton, `Remove ${ids.length === 1 ? "page" : `${ids.length} pages`}?`, () => removePages(chosenPages()));
+};
+
 newGroupButton.addEventListener("click", () => newGroup(chosenPages()));
-removeButton.addEventListener("click", () => removePages(chosenPages()));
+removeButton.addEventListener("click", removeChosen);
 
 function setTool(next: typeof tool) {
   tool = next;
@@ -301,6 +354,7 @@ function setMode(mode: Crop["kind"]) {
 
 /** Moves through the pages in sidebar order; `extend` picks every page from the anchor to there. */
 function step(by: number, extend = false) {
+  disarm();
   const seq = order();
   if (!seq.length) return;
   const at = seq.indexOf(index);
@@ -386,6 +440,7 @@ function close(apply: boolean) {
 }
 
 dialog.addEventListener("close", () => {
+  disarm();
   urls.forEach((u) => u?.then(URL.revokeObjectURL));
   urls = [];
   URL.revokeObjectURL(previewUrl);
@@ -397,26 +452,138 @@ dialog.addEventListener("close", () => {
 });
 
 // Clicked buttons lose focus (so Space can't click them again), which would take it out of
-// the dialog and leave its keys dead; bring it back.
+// the dialog and leave its keys dead; bring it back to the part the button is in.
 dialog.addEventListener("click", (e) => {
-  if (e.target instanceof HTMLButtonElement) dialog.focus();
+  const button = e.target instanceof HTMLElement && e.target.closest("button");
+  if (button) (sidebar.contains(button) ? sidebar : toolbar.contains(button) ? toolbar : dialog).focus();
 });
 
+// ---- keyboard ----
+
+const focusIn = (el: HTMLElement) => el.contains(document.activeElement);
+
+/** The first control in the toolbar that can take focus. */
+function focusToolbar() {
+  const controls = toolbar.querySelectorAll<HTMLElement>("select, input, button");
+  const first = [...controls].find((c) => !(c as HTMLButtonElement).disabled && c.offsetParent !== null);
+  (first ?? toolbar).focus();
+}
+
+function confirmReset() {
+  confirmFirst(resetButton, "Reset?", reset);
+}
+
+/** Keys that work wherever the focus is in the dialog. Returns whether it used the key. */
+function commandKey(e: KeyboardEvent): boolean {
+  if (!(e.metaKey || e.ctrlKey)) return false;
+  const inSidebar = focusIn(sidebar) && !sidebar.hidden;
+  if (e.code === "KeyE") viewport.focus();
+  else if (e.code === "KeyL") focusToolbar();
+  else if (e.code === "KeyB" && !sidebar.hidden) sidebar.focus();
+  else if (e.key === "Enter") applyButton.disabled || close(true);
+  else if (e.code === "KeyR" && e.shiftKey) confirmReset();
+  else if (e.code === "KeyP") tool === "crop" && togglePreview();
+  else if (e.code === "KeyG" && inSidebar) newGroup(chosenPages());
+  else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && inSidebar) shiftGroup(e.key === "ArrowUp" ? -1 : 1);
+  else return e.code === "KeyR"; // ⌘R alone would reload the page
+  return true;
+}
+
+/** Arrow keys as a step across or down the image: one screen pixel, or ten with ⇧. */
+function arrowStep(e: KeyboardEvent): [number, number] | null {
+  const n = e.shiftKey ? 10 : 1;
+  const [dx, dy] = { ArrowLeft: [-n, 0], ArrowRight: [n, 0], ArrowUp: [0, -n], ArrowDown: [0, n] }[e.key] ?? [];
+  return dx === undefined ? null : [dx / frame.clientWidth, dy / frame.clientHeight];
+}
+
+/** Keys for the crop or split itself, with the focus on the image. Returns whether it used the key. */
+function stageKey(e: KeyboardEvent): boolean {
+  const key = e.key.toLowerCase();
+  const by = arrowStep(e);
+  if (tool === "split") {
+    const part = ({ t: "top", b: "bottom", l: "line" } as const)[key as "t" | "b" | "l"];
+    if (part && !e.shiftKey) splitBox.setActive(part);
+    else if (by && by[0] && splitBox.active) {
+      splitBox.nudge(by[0] / (rectWidth() || 1));
+      commit();
+    } else return false;
+    return true;
+  }
+  if (previewing) return false;
+  const outline = modeSelect.value === "outline";
+  if (key === "r" || key === "o") {
+    setMode(key === "r" ? "rect" : "outline");
+    commit();
+    refresh();
+    return true;
+  }
+  const corner = "qwsa".indexOf(key); // clockwise from the top-left, as they sit on the keyboard
+  if (corner >= 0 && !e.shiftKey) {
+    if (outline) outlineBox.setActive({ corner });
+    else rectBox.setActive(["nw", "ne", "se", "sw"][corner]);
+    return true;
+  }
+  if ((key === "z" || key === "x") && !e.shiftKey) {
+    const by = key === "x" ? 1 : -1; // x goes clockwise, z back
+    if (outline) {
+      const ring = outlineBox.anchors();
+      const at = ring.findIndex((a) => sameAnchor(a, outlineBox.active));
+      outlineBox.setActive(ring[at < 0 ? 0 : (at + by + ring.length) % ring.length]);
+    } else {
+      const at = HANDLES.indexOf(rectBox.active ?? "");
+      rectBox.setActive(HANDLES[at < 0 ? 0 : (at + by + HANDLES.length) % HANDLES.length]);
+    }
+    return true;
+  }
+  const box = outline ? outlineBox : rectBox;
+  if (by && box.active) {
+    box.nudge(...by);
+    commit();
+    return true;
+  }
+  return false;
+}
+
+const sameAnchor = (a: Anchor, b: Anchor | null) =>
+  !!b && ("corner" in a ? "corner" in b && a.corner === b.corner : "edge" in b && a.edge === b.edge && a.index === b.index);
+
+/** How much of the image's width the page being split spans, so a nudge moves the line about a pixel. */
+function rectWidth() {
+  const crop = pages[index]?.crop;
+  return crop?.kind === "rect" ? crop.rect.w : 1;
+}
+
 dialog.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  if (commandKey(e)) {
+    e.preventDefault();
+    return;
+  }
+  const t = e.target;
+  // Controls keep their own keys.
+  if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) return;
+  if (t instanceof HTMLButtonElement && (e.key === "Enter" || e.key === " ")) return;
+  if (focusIn(viewport) && !e.metaKey && !e.ctrlKey && !e.altKey && stageKey(e)) {
+    e.preventDefault();
+    return;
+  }
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     step(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
-  } else if ((e.key === "Backspace" || e.key === "Delete") && pages.length > 1) {
+  } else if ((e.key === "Backspace" || e.key === "Delete") && focusIn(sidebar) && !sidebar.hidden) {
     e.preventDefault();
-    removeButton.click();
+    removeChosen();
   } else if (e.key === "Enter") {
     if (applyButton.disabled) return;
     e.preventDefault();
     close(true);
-  } else if (tool === "crop" && (e.key === "p" || e.key === "P")) {
-    togglePreview();
   }
+});
+
+// Esc cancels the edit, but first takes back a question being asked.
+dialog.addEventListener("cancel", (e) => {
+  if (!armed) return;
+  e.preventDefault();
+  disarm();
 });
 
 modeSelect.addEventListener("change", () => {
@@ -431,7 +598,7 @@ lensInput.addEventListener("input", () => {
   if (previewing) refresh();
 });
 previewButton.addEventListener("click", togglePreview);
-$("editor-reset").addEventListener("click", () => {
+function reset() {
   if (tool === "split") {
     splitBox.set(CENTRE);
   } else if (modeSelect.value === "outline") {
@@ -441,7 +608,8 @@ $("editor-reset").addEventListener("click", () => {
   }
   commit();
   if (previewing) refresh();
-});
+}
+resetButton.addEventListener("click", confirmReset);
 $("editor-cancel").addEventListener("click", () => close(false));
 applyButton.addEventListener("click", () => close(true));
 
