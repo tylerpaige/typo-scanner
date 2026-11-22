@@ -107,10 +107,6 @@
     <header>
       <span id="editor-title"></span>
       <span class="spacer"></span>
-      <span id="editor-scope" class="segmented" role="group" aria-label="Which pages a change goes to">
-        <button id="editor-scope-all" title="Changes go to every selected page not adjusted on its own (A)">All pages</button>
-        <button id="editor-scope-page" title="Changes go to this page only, which then keeps them (T)">This page</button>
-      </span>
       <select id="editor-mode">
         <option value="rect">Rectangle crop</option>
         <option value="outline">Page outline</option>
@@ -123,8 +119,18 @@
       <button id="editor-cancel">Cancel</button>
       <button id="editor-apply" class="primary">Crop</button>
     </header>
-    <div id="editor-viewport" class="viewport">
-      <div id="editor-frame" class="frame"><img id="editor-img" alt="" draggable="false" /></div>
+    <div class="editor-body">
+      <div id="editor-viewport" class="viewport">
+        <div id="editor-frame" class="frame"><img id="editor-img" alt="" draggable="false" /></div>
+      </div>
+      <aside id="editor-sidebar">
+        <div class="row">
+          <button id="editor-new-group" title="Put the picked pages in a group of their own, to adjust separately">New group</button>
+          <button id="editor-remove" title="Leave the picked pages out of this edit (⌫)">Remove</button>
+          <span id="editor-picked" class="muted"></span>
+        </div>
+        <div id="editor-groups"></div>
+      </aside>
     </div>
   </dialog>
   <video id="video" playsinline muted></video>

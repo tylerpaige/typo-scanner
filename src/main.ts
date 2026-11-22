@@ -625,7 +625,7 @@ viewer.addEventListener("close", () => {
 
 function editable(p: Page): EditablePage {
   const [width, height] = turnedSize(p);
-  return { original: p.original, turn: p.turn, width, height, crop: p.crop, number: pages.indexOf(p) + 1 };
+  return { original: p.original, turn: p.turn, width, height, crop: p.crop, number: pages.indexOf(p) + 1, thumb: p.thumb };
 }
 
 function cropSelected() {
@@ -639,7 +639,7 @@ function cropSelected() {
       renderPages();
       for (const [i, page] of chosen.entries()) {
         const crop = crops[i];
-        if (JSON.stringify(crop) === JSON.stringify(page.crop)) continue; // left as it was
+        if (!crop || JSON.stringify(crop) === JSON.stringify(page.crop)) continue; // left as it was
         setStatus(`${crop.kind === "outline" ? "Flattening" : "Cropping"} ${i + 1} of ${chosen.length}…`);
         page.crop = crop;
         try {
@@ -663,10 +663,14 @@ function splitSelected() {
   if (busy || chosen.length === 0) return;
   openSplitter(chosen.map(editable), loadSplit(), (splits) => {
     // The first page's split becomes the one new splits start from.
-    store("split", JSON.stringify(splits[0]));
-    liveSplit.set(splits[0]);
+    const first = splits.find((s) => s);
+    if (first) {
+      store("split", JSON.stringify(first));
+      liveSplit.set(first);
+    }
     for (const [n, page] of chosen.entries()) {
       const split = splits[n];
+      if (!split) continue; // taken out of the edit
       const i = pages.indexOf(page);
       if (i < 0) continue;
       const spread = { pair: nextPair++, whole: page.crop, turn: page.turn };

@@ -385,8 +385,48 @@ kbd {
   color: var(--text);
 }
 #editor[open] { display: flex; flex-direction: column; }
-#editor-scope { display: inline-flex; }
-#editor-scope[hidden] { display: none; }
+.editor-body { flex: 1; display: flex; min-height: 0; }
+.editor-body .viewport { min-width: 0; }
+#editor-sidebar {
+  width: 236px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+#editor-sidebar[hidden] { display: none; }
+#editor-sidebar .row { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+#editor-sidebar .row button { padding: 3px 8px; }
+#editor-picked { font-size: 11px; white-space: nowrap; }
+#editor-groups { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+#editor-groups .group { border: 1px solid var(--line); border-radius: 8px; padding: 6px; }
+#editor-groups .group.current { border-color: var(--muted); }
+#editor-groups .group.drop, #editor-groups .new-group-drop.drop { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+#editor-groups .group header { padding: 0 2px 6px; border: none; background: none; font-size: 11px; font-weight: 600; color: var(--muted); }
+#editor-groups ol { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+#editor-groups li { position: relative; cursor: pointer; }
+#editor-groups li img { display: block; width: 100%; border: 1px solid var(--line); outline: 3px solid transparent; outline-offset: 1px; }
+#editor-groups li.picked img { outline-color: var(--muted); }
+#editor-groups li.current img { outline-color: var(--accent); }
+#editor-groups .num {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.65);
+  color: white;
+  font-size: 11px;
+}
+.new-group-drop {
+  padding: 14px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
 #editor img { user-select: none; -webkit-user-drag: none; }
 
 /* The <video> only feeds the canvases; it must stay rendered so frames keep arriving. */
