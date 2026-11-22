@@ -53,6 +53,9 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.confirm { background: #c9372c; border-color: #c9372c; color: white; }
 
 main { flex: 1; display: flex; min-height: 0; }
+.tools { display: contents; }
+.tools[hidden], .view[hidden] { display: none; }
+.view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #stage {
   flex: 1;
   position: relative;
@@ -146,7 +149,79 @@ button.on { background: var(--accent); border-color: var(--accent); color: white
 .lens { display: inline-flex; align-items: center; gap: 6px; }
 .lens[hidden] { display: none; }
 .lens input { width: 110px; }
-.frame.previewing > .cropbox, .frame.previewing > .outlinebox { display: none; }
+.frame.previewing > .cropbox, .frame.previewing > .outlinebox, .frame.previewing > .splitbox { display: none; }
+
+/* ---- spread split ---- */
+.splitbox { position: absolute; inset: 0; pointer-events: none; }
+.splitbox svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.splitbox .gutter {
+  fill: none;
+  stroke: #ff9f1a;
+  stroke-width: 2;
+  stroke-dasharray: 8 5;
+  vector-effect: non-scaling-stroke;
+}
+.splitbox .grip {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: ew-resize;
+}
+.splitbox .handle { pointer-events: auto; cursor: ew-resize; border-radius: 50%; background: #ff9f1a; }
+/* The ends sit just inside the line's ends, so they can be grabbed at the frame's edge. */
+.splitbox .handle.split-top { margin-top: 0; }
+.splitbox .handle.split-bottom { margin-top: -14px; }
+/* Splitting shows the page's crop but leaves it alone. */
+.frame.splitting > .cropbox, .frame.splitting > .cropbox *, .frame.splitting > .outlinebox * { pointer-events: none; }
+.frame.splitting > .cropbox .handle, .frame.splitting > .outlinebox .handle { display: none; }
+
+/* ---- scanner intake ---- */
+.intake-bar, .intake-tray {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  color: var(--text);
+}
+.intake-bar { border-bottom: 1px solid var(--line); }
+.intake-tray { border-top: 1px solid var(--line); min-height: 92px; }
+.intake-bar label { display: inline-flex; align-items: center; gap: 6px; }
+#intake-path { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#intake-message { max-width: 420px; text-align: center; color: #ddd; }
+#intake-canvas { cursor: grab; }
+#intake-canvas:active { cursor: grabbing; }
+#intake-tiles { display: flex; gap: 8px; list-style: none; margin: 0; padding: 0; }
+#intake-tiles li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+#intake-tiles li.selected { border-color: var(--accent); }
+#intake-tiles li.doubtful span { color: #e5484d; font-weight: 600; }
+#intake-tiles canvas { display: block; border: 1px solid var(--line); }
+#intake-tiles .delete {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0 5px;
+  font-size: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  visibility: hidden;
+}
+#intake-tiles li:hover .delete { visibility: visible; }
+#intake-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- loupe ---- */
 .loupe {
@@ -177,7 +252,9 @@ button.on { background: var(--accent); border-color: var(--accent); color: white
 }
 
 aside {
-  width: 200px;
+  position: relative;
+  flex: none;
+  width: 224px;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--line);
@@ -185,16 +262,48 @@ aside {
 }
 .aside-bar {
   display: flex;
+  flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
 }
-.aside-bar button { flex: 1; padding: 3px 6px; }
+#sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+}
+#sidebar-resizer:hover, #sidebar-resizer.dragging { background: var(--accent); opacity: 0.5; }
+.aside-bar .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.aside-bar button { padding: 3px 6px; }
+#crop-selected, #split-selected, #unsplit-selected { flex: 1; }
+.aside-bar button.icon { font-size: 15px; line-height: 1; padding: 3px 8px; }
+#selection-count { font-size: 11px; white-space: nowrap; }
+.segmented { gap: 0 !important; }
+.segmented button { flex: 1; border-radius: 0; margin-left: -1px; }
+.segmented button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; }
+#select-range {
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+#select-range.invalid { border-color: #e5484d; }
+#select-scope { margin: 0; font-size: 11px; min-height: 1.4em; }
 #pages {
   list-style: none;
   margin: 0;
   padding: 10px;
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px;
   overflow-y: auto;
   align-content: start;
@@ -207,7 +316,9 @@ aside {
   outline: 3px solid transparent;
   outline-offset: 1px;
 }
-#pages li.selected img { outline-color: var(--accent); }
+#pages li.selected img { outline-color: var(--muted); }
+/* Selected pages are only "live" (for ⌘R and the like) once you're working in the list. */
+#sidebar.active #pages li.selected img { outline-color: var(--accent); }
 #pages .num {
   position: absolute;
   left: 4px;
@@ -259,6 +370,8 @@ kbd {
   color: var(--text);
 }
 #editor[open] { display: flex; flex-direction: column; }
+#editor-scope { display: inline-flex; }
+#editor-scope[hidden] { display: none; }
 #editor img { user-select: none; -webkit-user-drag: none; }
 
 /* The <video> only feeds the canvases; it must stay rendered so frames keep arriving. */

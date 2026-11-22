@@ -9,8 +9,13 @@
 </head>
 <body>
   <header>
+    <select id="source" title="Where pages come from">
+      <option value="camera">Camera</option>
+      <option value="scanner">Scanner folder</option>
+    </select>
+    <span id="camera-tools" class="tools">
     <select id="camera" title="Camera"></select>
-    <button id="rotate" title="Rotate (R)">Rotate 0°</button>
+    <button id="rotate" title="Rotate the camera (R or ⌘R; ⇧ to go left)">Rotate 0°</button>
     <button id="loupe" title="Magnifier (L) — scroll to zoom">Loupe</button>
     <select id="crop-mode" title="How to crop new captures (O)">
       <option value="rect">Rectangle crop</option>
@@ -20,7 +25,9 @@
       Lens <input id="lens" type="range" min="-0.4" max="0.4" step="0.005" value="0" />
     </label>
     <button id="crop-reset" title="Clear the crop or outline for the next captures" hidden>Reset</button>
+    <button id="split" title="Split each capture into two pages at the gutter">Split</button>
     <span id="resolution" class="muted"></span>
+    </span>
     <span class="spacer"></span>
     <span id="status" class="muted"></span>
     <button id="clear" disabled>Clear</button>
@@ -28,18 +35,64 @@
   </header>
   <main>
     <section id="stage">
-      <div id="viewport" class="viewport">
-        <div id="frame" class="frame"><canvas id="preview"></canvas></div>
-        <p id="message" hidden></p>
+      <div id="camera-view" class="view">
+        <div id="viewport" class="viewport">
+          <div id="frame" class="frame"><canvas id="preview"></canvas></div>
+          <p id="message" hidden></p>
+        </div>
+        <div class="shutter-bar">
+          <button id="capture" title="Capture (Space)" aria-label="Capture page"></button>
+        </div>
       </div>
-      <div class="shutter-bar">
-        <button id="capture" title="Capture (Space)" aria-label="Capture page"></button>
+      <div id="intake-view" class="view" hidden>
+        <div class="intake-bar">
+          <button id="intake-folder" title="The folder your scanner saves into">Choose folder…</button>
+          <span id="intake-path" class="muted"></span>
+          <button id="intake-import" hidden></button>
+          <span class="spacer"></span>
+          <label>Scans per page
+            <select id="intake-per-page">
+              <option>1</option><option>2</option><option>3</option><option>4</option>
+            </select>
+          </label>
+          <label title="Add each page as soon as its scans line up well"><input id="intake-auto" type="checkbox" /> Add automatically</label>
+          <button id="intake-rotate" title="Turn the joined pages (R or ⌘R; ⇧ to go left)">Rotate 0°</button>
+        </div>
+        <div id="intake-viewport" class="viewport">
+          <div id="intake-frame" class="frame"><canvas id="intake-canvas"></canvas></div>
+          <p id="intake-message"></p>
+        </div>
+        <div class="intake-tray">
+          <ol id="intake-tiles"></ol>
+          <span id="intake-status" class="muted"></span>
+          <span class="spacer"></span>
+          <button id="intake-diff" title="Show where the selected scan disagrees with the others (D)">Difference</button>
+          <button id="intake-snap" title="Line the selected scan up from where it is now (S)">Snap</button>
+          <button id="intake-discard" title="Throw away these scans">Discard</button>
+          <button id="intake-add" class="primary" title="Add to the pages (Enter)">Add page</button>
+        </div>
       </div>
     </section>
-    <aside>
+    <aside id="sidebar">
+      <div id="sidebar-resizer" title="Drag to resize · double-click to reset"></div>
       <div class="aside-bar">
-        <button id="crop-selected" title="Crop the selected pages (C)" disabled>Crop…</button>
-        <button id="select-all" title="Select all (⌘A)">Select all</button>
+        <div class="row">
+          <button id="crop-selected" title="Crop or flatten the selected pages (C)" disabled>Crop…</button>
+          <button id="split-selected" title="Split the selected spreads into two pages each" disabled>Split…</button>
+          <button id="unsplit-selected" title="Join split pages back into their spreads" hidden>Unsplit</button>
+          <button id="rotate-left" class="icon" title="Rotate the selected pages left (⌘⇧R)" aria-label="Rotate left" disabled>⟲</button>
+          <button id="rotate-right" class="icon" title="Rotate the selected pages right (⌘R)" aria-label="Rotate right" disabled>⟳</button>
+          <span id="selection-count" class="muted"></span>
+        </div>
+        <div class="row segmented" role="group" aria-label="Select pages">
+          <button id="select-all" title="Select every page in the range (⌘A)">All</button>
+          <button id="select-odd" title="Select the odd-numbered pages in the range">Odd</button>
+          <button id="select-even" title="Select the even-numbered pages in the range">Even</button>
+          <button id="select-none" title="Select nothing (Esc)">None</button>
+        </div>
+        <input id="select-range" type="text" placeholder="Range, e.g. 3-12, 15" spellcheck="false" autocomplete="off"
+          title="Pages to choose from. Leave empty to use the span of the current selection, or every page." />
+        <p id="select-scope" class="muted"></p>
       </div>
       <ol id="pages"></ol>
       <p id="empty" class="muted">
@@ -54,6 +107,10 @@
     <header>
       <span id="editor-title"></span>
       <span class="spacer"></span>
+      <span id="editor-scope" class="segmented" role="group" aria-label="Which pages a change goes to">
+        <button id="editor-scope-all" title="Changes go to every selected page not adjusted on its own (A)">All pages</button>
+        <button id="editor-scope-page" title="Changes go to this page only, which then keeps them (T)">This page</button>
+      </span>
       <select id="editor-mode">
         <option value="rect">Rectangle crop</option>
         <option value="outline">Page outline</option>

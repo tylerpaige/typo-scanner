@@ -6,6 +6,8 @@ export interface RenderRequest {
   id: number;
   source: Blob | ImageBitmap;
   crop: Crop;
+  /** Quarter turns clockwise, in degrees, applied to the photo before cropping. */
+  turn?: number;
   /** Scale the photo down to at most this many pixels on its long side first (for previews). */
   maxSide?: number;
   /** Skip encoding the full-size result (when the caller can reuse the original). */
@@ -20,16 +22,21 @@ export interface RenderResult {
   height: number;
 }
 
-const THUMB = 360;
+const THUMB = 480; // sharp enough for a widened sidebar
 
-async function render({ source, crop, maxSide = Infinity, skipOutput }: RenderRequest) {
+async function render({ source, crop, turn = 0, maxSide = Infinity, skipOutput }: RenderRequest) {
   const bitmap = source instanceof Blob ? await createImageBitmap(source) : source;
   const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
-  const sw = Math.round(bitmap.width * scale);
-  const sh = Math.round(bitmap.height * scale);
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+  const sideways = turn % 180 !== 0;
+  const [sw, sh] = sideways ? [h, w] : [w, h];
   const src = new OffscreenCanvas(sw, sh);
   const sctx = src.getContext("2d", { willReadFrequently: crop.kind === "outline" })!;
-  sctx.drawImage(bitmap, 0, 0, sw, sh);
+  sctx.translate(sw / 2, sh / 2);
+  sctx.rotate((turn * Math.PI) / 180);
+  sctx.drawImage(bitmap, -w / 2, -h / 2, w, h);
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
   bitmap.close();
 
   let out: OffscreenCanvas;
