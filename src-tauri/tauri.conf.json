@@ -34,6 +34,18 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["typoscan"],
+        "name": "Typo Scanner Project",
+        "role": "Editor",
+        "rank": "Owner",
+        "exportedType": {
+          "identifier": "codes.typo.typo-scanner.project",
+          "conformsTo": ["public.data"]
+        }
+      }
+    ],
     "macOS": {
       "entitlements": "Entitlements.plist"
     }

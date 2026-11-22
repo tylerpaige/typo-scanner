@@ -1,10 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { CropBox, fitFrame } from "./cropbox";
-import { openEditor, openSplitter, type EditablePage } from "./editor";
+import { editorAction, openEditor, openSplitter, type EditablePage } from "./editor";
 import { FULL, clamp, isFull, rotateRect, type Rect } from "./geometry";
 import { initIntake } from "./intake";
 import { Loupe } from "./loupe";
+import { menuPart, refreshMenu } from "./menu";
 import { outlineFromRect, rotateOutline, type Crop, type Outline } from "./outline";
 import { OutlineBox } from "./outlinebox";
 import { buildPdf } from "./pdf";
@@ -639,6 +640,7 @@ rangeInput.addEventListener("keydown", (e) => {
     rangeInput.blur();
     setArea("pages");
   } else if (e.key === "Escape") {
+    e.preventDefault(); // or the menu's Select ▸ None would also act on it
     rangeInput.value = "";
     rangeInput.blur();
     renderSelectionTools();
@@ -735,7 +737,7 @@ function renderPages() {
   unsplitSelectedButton.hidden = !pages.some((p) => selected.has(p) && p.spread);
   unsplitSelectedButton.disabled = busy;
   renderSelectionTools();
-  syncMenu(spreads);
+  refreshMenu();
   resetClear();
   if (!busy) {
     const count = pages.length ? `${pages.length} page${pages.length === 1 ? "" : "s"}` : "";
@@ -993,6 +995,7 @@ async function hold(job: () => Promise<string | null>, failure: string) {
   busy = false;
   renderPages();
   if (outcome) setStatus(outcome);
+  openFromFinder();
 }
 
 /** Saves the pages, with everything needed to keep editing them, to the open project or (with `copy`, or if it's new) a file chosen now. */
@@ -1026,9 +1029,10 @@ const saveProject = (copy = false) =>
     return `Saved ${fileName(path)}`;
   }, "Save failed");
 
-const openProject = () =>
+/** Opens the project at `given`, or one chosen now. */
+const openProject = (given?: string) =>
   hold(async () => {
-    const path = await invoke<string | null>("pick_project");
+    const path = given ?? (await invoke<string | null>("pick_project"));
     if (!path || (edited && !(await invoke<boolean>("confirm_discard")))) return null;
     setStatus("Opening…");
     const loaded = unpackProject(new Uint8Array(await invoke<ArrayBuffer>("read_project", { path })));
@@ -1089,7 +1093,18 @@ const packageProject = () =>
     return `Packaged ${pages.length} pages into ${fileName(folder)}`;
   }, "Package failed");
 
-openButton.addEventListener("click", openProject);
+openButton.addEventListener("click", () => openProject());
+
+/** Opens a project double-clicked in the Finder, once nothing else is going on; until then it waits in Rust. */
+async function openFromFinder() {
+  if (busy || rendering > 0 || document.querySelector("dialog[open]")) return;
+  const paths = await invoke<string[]>("take_opened");
+  // There's one window, so of several opened at once the last one wins.
+  if (paths.length) openProject(paths[paths.length - 1]);
+}
+listen("opened", openFromFinder);
+document.querySelectorAll("dialog").forEach((d) => d.addEventListener("close", openFromFinder));
+openFromFinder();
 saveButton.addEventListener("click", () => saveProject());
 exportButton.addEventListener("click", exportPdf);
 
@@ -1097,52 +1112,95 @@ exportButton.addEventListener("click", exportPdf);
 
 const plural = (n: number, one: string, many: string) => (n > 1 ? `${n} ${many}` : one);
 
-let menuState = "";
-/** Turns the menu's items on and off, and counts pages in their titles, to match the buttons. */
-function syncMenu(spreads: number) {
-  const ready = !busy && rendering === 0;
+menuPart(() => {
+  // The crop and split editors (and the viewer) keep the pages still.
+  const free = !document.querySelector("dialog[open]");
+  const ready = free && !busy && rendering === 0;
   const s = scope();
-  const state = {
+  const camera = sourceSelect.value === "camera";
+  const some = pages.length > 0;
+  const picked = selected.size > 0;
+  // The arrow keys move about the page list only while you're working in it.
+  const inList = free && area === "pages" && some;
+  const spreads = pages.filter((p) => selected.has(p) && !p.spread).length;
+  const these = plural(selected.size, "Page", "Pages");
+  return {
     enabled: {
-      new: !busy && (pages.length > 0 || projectPath !== null),
+      new: free && !busy && (some || projectPath !== null),
       open: ready,
-      save: ready && pages.length > 0,
-      "save-as": ready && pages.length > 0,
-      export: ready && pages.length > 0,
-      package: ready && pages.length > 0,
-      crop: !cropSelectedButton.disabled,
-      split: !splitSelectedButton.disabled,
-      "rotate-cw": !rotateRightButton.disabled,
-      "rotate-ccw": !rotateLeftButton.disabled,
-      "select-even": !!s?.indexes.length,
-      "select-odd": !!s?.indexes.length,
-      "select-range": pages.length > 0,
-      "select-none": selected.size > 0,
+      save: ready && some,
+      "save-as": ready && some,
+      export: ready && some,
+      package: ready && some,
+      crop: free && !cropSelectedButton.disabled,
+      split: free && !splitSelectedButton.disabled,
+      unsplit: free && !busy && !unsplitSelectedButton.hidden,
+      "rotate-cw": free && !rotateRightButton.disabled,
+      "rotate-ccw": free && !rotateLeftButton.disabled,
+      "move-back": inList && picked && !busy,
+      "move-forward": inList && picked && !busy,
+      "move-up": inList && picked && !busy,
+      "move-down": inList && picked && !busy,
+      delete: free && !busy && some,
+      "select-all": free,
+      "select-even": free && !!s?.indexes.length,
+      "select-odd": free && !!s?.indexes.length,
+      "select-range": free && some,
+      "select-none": free && picked,
+      "previous-page": inList,
+      "next-page": inList,
+      "page-above": inList,
+      "page-below": inList,
+      "extend-back": inList && picked,
+      "extend-forward": inList && picked,
+      "use-camera": free && !camera,
+      "use-scanner": free && camera,
+      capture: free && camera,
+      "camera-cw": free && camera,
+      "camera-ccw": free && camera,
+      loupe: free && camera,
+      "crop-mode": free && camera,
+      "crop-reset": free && camera && !cropResetButton.hidden,
+      "split-captures": free && camera,
     },
     titles: {
-      crop: `Crop ${plural(selected.size, "Page", "Pages")}…`,
+      crop: `Crop ${these}…`,
       split: `Split ${plural(spreads, "Page", "Pages")}…`,
-      "rotate-cw": `Rotate ${plural(selected.size, "Page", "Pages")} Clockwise`,
-      "rotate-ccw": `Rotate ${plural(selected.size, "Page", "Pages")} Counter-clockwise`,
+      "rotate-cw": `Rotate ${these} Clockwise`,
+      "rotate-ccw": `Rotate ${these} Counter-clockwise`,
+      "move-back": `Move ${these} Back`,
+      "move-forward": `Move ${these} Forward`,
+      "move-up": `Move ${these} Up a Row`,
+      "move-down": `Move ${these} Down a Row`,
+      delete: picked ? `Delete ${these}` : "Delete Last Page",
+      loupe: loupe.on ? "Hide Magnifier" : "Show Magnifier",
+      "crop-mode": cropModeSelect.value === "outline" ? "Use Rectangle Crop" : "Use Page Outline",
+      "split-captures": splitButton.classList.contains("on") ? "Stop Splitting Captures" : "Split Each Capture",
     },
   };
-  const json = JSON.stringify(state);
-  if (json === menuState) return;
-  menuState = json;
-  invoke("set_menu_state", state).catch(() => {});
-}
+});
+
+const deleteSelected = () => {
+  if (!busy) removePages(selected.size ? pages.filter((p) => selected.has(p)) : pages.slice(-1));
+};
 
 const menuActions: Record<string, () => unknown> = {
   new: newProject,
-  open: openProject,
+  open: () => openProject(),
   save: () => saveProject(),
   "save-as": () => saveProject(true),
   export: exportPdf,
   package: packageProject,
   crop: cropSelected,
   split: splitSelected,
+  unsplit: unsplitSelected,
   "rotate-cw": () => rotateSelected(1),
   "rotate-ccw": () => rotateSelected(-1),
+  "move-back": () => shiftSelected(-1),
+  "move-forward": () => shiftSelected(1),
+  "move-up": () => shiftSelected(-columns()),
+  "move-down": () => shiftSelected(columns()),
+  delete: deleteSelected,
   // ⌘A in a text field reaches here (the page leaves it alone), so there it selects the text.
   "select-all": () =>
     document.activeElement instanceof HTMLInputElement && document.activeElement.type === "text"
@@ -1152,11 +1210,28 @@ const menuActions: Record<string, () => unknown> = {
   "select-odd": () => selectParity("odd"),
   "select-range": focusRange,
   "select-none": () => selectAll(false),
+  "previous-page": () => moveCursor(-1, false),
+  "next-page": () => moveCursor(1, false),
+  "page-above": () => moveCursor(-columns(), false),
+  "page-below": () => moveCursor(columns(), false),
+  "extend-back": () => moveCursor(-1, true),
+  "extend-forward": () => moveCursor(1, true),
+  "use-camera": () => setSource("camera"),
+  "use-scanner": () => setSource("scanner"),
+  capture,
+  "camera-cw": () => setRotation(rotation + 90),
+  "camera-ccw": () => setRotation(rotation - 90),
+  loupe: toggleLoupe,
+  "crop-mode": () => setCropMode(cropModeSelect.value === "outline" ? "rect" : "outline"),
+  "crop-reset": () => cropResetButton.click(),
+  "split-captures": () => setSplitting(!splitButton.classList.contains("on")),
 };
 
 listen<string>("menu", (e) => {
-  if (document.querySelector("dialog[open]")) return; // the crop and split editors keep the pages still
-  menuActions[e.payload]?.();
+  if (editorAction(e.payload) || document.querySelector("dialog[open]")) return;
+  const action = menuActions[e.payload];
+  if (action) action();
+  else intake.menuAction(e.payload);
 });
 
 // ---- keyboard ----
@@ -1223,13 +1298,11 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     return;
   }
+  // Every key handled here is kept from the menu, which would otherwise act on it as well.
   if (e.key === " ") {
-    e.preventDefault();
     if (!e.repeat) capture();
   } else if (e.key === "Backspace" || e.key === "Delete") {
-    e.preventDefault();
-    if (busy) return;
-    removePages(selected.size ? pages.filter((p) => selected.has(p)) : pages.slice(-1));
+    deleteSelected();
   } else if (e.key === "Escape") {
     selectAll(false);
   } else if (camera && (e.key === "r" || e.key === "R")) {
@@ -1240,7 +1313,8 @@ document.addEventListener("keydown", (e) => {
     setCropMode(cropModeSelect.value === "outline" ? "rect" : "outline");
   } else if (e.key === "c" || e.key === "C") {
     cropSelected();
-  }
+  } else return;
+  e.preventDefault();
 });
 
 // Clicking a button leaves it focused, and Space would then click it again.

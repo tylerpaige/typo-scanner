@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fitFrame } from "./cropbox";
+import { menuPart, refreshMenu } from "./menu";
 import { IDENTITY, apply, bounds, compose, inverse, rotateAbout, type Pt, type Transform } from "./stitch";
 import { stitcher } from "./stitcher";
 
@@ -396,6 +397,7 @@ function draw() {
   discardButton.disabled = addButton.disabled = group.length === 0;
   addButton.textContent = group.length > 1 ? `Join ${group.length} scans` : "Add page";
   drawTray();
+  refreshMenu();
 
   const queued = queue.length + waiting.length;
   const doubtful = group.filter((t) => !goodEnough(t)).length;
@@ -627,11 +629,65 @@ function handleKey(e: KeyboardEvent): boolean {
     }
     case "Tab":
       if (group.length === 0) return false;
-      selected = (selected + (e.shiftKey ? -1 : 1) + group.length) % group.length;
-      draw();
+      selectScan(e.shiftKey ? -1 : 1);
       return true;
   }
   return false;
+}
+
+menuPart(() => {
+  const on = active && !document.querySelector("dialog[open]");
+  const has = on && group.length > 0;
+  const scan = has && selected >= 0;
+  return {
+    enabled: {
+      "choose-folder": on,
+      import: on && existing.length > 0,
+      "redo-import": on && imported.length > 0,
+      "add-page": has,
+      "discard-scans": has,
+      "next-scan": has,
+      "previous-scan": has,
+      snap: on && !snapButton.disabled,
+      difference: on && !diffButton.disabled,
+      "turn-scan-left": scan,
+      "turn-scan-right": scan,
+      "turn-scan-left-more": scan,
+      "turn-scan-right-more": scan,
+      "scanner-cw": on,
+      "scanner-ccw": on,
+    },
+    titles: {
+      import: existing.length ? `Import ${existing.length} Scans Already There` : "Import Scans Already There",
+      "redo-import": `Redo Import at ${perPage} per Page`,
+      "add-page": group.length > 1 ? `Join ${group.length} Scans` : "Add Page",
+      difference: diff ? "Hide Difference" : "Show Difference",
+    },
+  };
+});
+
+const menuActions: Record<string, () => void> = {
+  "choose-folder": () => folderButton.click(),
+  import: () => importButton.click(),
+  "redo-import": () => redoButton.click(),
+  "add-page": () => addButton.click(),
+  "discard-scans": () => discardButton.click(),
+  "next-scan": () => selectScan(1),
+  "previous-scan": () => selectScan(-1),
+  snap: () => snapButton.click(),
+  difference: () => diffButton.click(),
+  "turn-scan-left": () => turnSelected(-0.1),
+  "turn-scan-right": () => turnSelected(0.1),
+  "turn-scan-left-more": () => turnSelected(-1),
+  "turn-scan-right-more": () => turnSelected(1),
+  "scanner-cw": () => rotateOutput(90),
+  "scanner-ccw": () => rotateOutput(-90),
+};
+
+function selectScan(by: number) {
+  if (group.length === 0) return;
+  selected = (selected + by + group.length) % group.length;
+  draw();
 }
 
 export function initIntake(h: IntakeHost) {
@@ -646,6 +702,8 @@ export function initIntake(h: IntakeHost) {
       }
     },
     handleKey,
+    /** Does what the menu item `id` says, if it's one of the scanner's. */
+    menuAction: (id: string) => menuActions[id]?.(),
     rotate: (quarters: number) => rotateOutput(quarters * 90),
   };
 }

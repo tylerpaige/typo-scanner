@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::webview::{PermissionKind, PermissionResponse};
@@ -103,6 +104,17 @@ async fn read_project(path: String) -> Result<Response, String> {
         return Err("not a Typo Scanner project".into());
     }
     std::fs::read(path).map(Response::new).map_err(err)
+}
+
+/// Projects opened from the Finder, waiting for the page to take them. They wait here because
+/// one double-clicked to launch the app arrives before the page is listening.
+#[derive(Default)]
+struct Opened(Mutex<Vec<String>>);
+
+/// Hands the page the projects opened from the Finder since it last asked.
+#[tauri::command]
+fn take_opened(opened: tauri::State<Opened>) -> Vec<String> {
+    std::mem::take(&mut *opened.0.lock().unwrap())
 }
 
 /// Whether the open pages have changes that aren't saved, so closing can ask first.
@@ -267,28 +279,159 @@ fn heic_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     bytes
 }
 
-/// The app's own menu items: id, title, and shortcut (shortcuts the page also handles
-/// reach the page first, so these mostly show them and catch clicks).
-const FILE_MENU: &[(&str, &str, &str)] = &[
-    ("new", "New Project", "CmdOrCtrl+N"),
-    ("open", "Open Project…", "CmdOrCtrl+O"),
-    ("save", "Save Project", "CmdOrCtrl+S"),
-    ("save-as", "Save As…", "CmdOrCtrl+Shift+S"),
-    ("export", "Export as PDF…", "CmdOrCtrl+E"),
-    ("package", "Package…", "CmdOrCtrl+Alt+Shift+P"),
-];
-const EDIT_MENU: &[(&str, &str, &str)] = &[
-    ("crop", "Crop Page…", "CmdOrCtrl+C"),
-    ("split", "Split Page…", "CmdOrCtrl+/"),
-    ("rotate-cw", "Rotate Page Clockwise", "CmdOrCtrl+R"),
-    ("rotate-ccw", "Rotate Page Counter-clockwise", "CmdOrCtrl+Shift+R"),
-];
-const SELECT_MENU: &[(&str, &str, &str)] = &[
-    ("select-all", "All", "CmdOrCtrl+A"),
-    ("select-even", "Even", "CmdOrCtrl+Shift+A"),
-    ("select-odd", "Odd", "CmdOrCtrl+Alt+A"),
-    ("select-range", "Range…", "CmdOrCtrl+Ctrl+A"),
-    ("select-none", "None", ""),
+/// An entry in one of the app's menus.
+enum Entry {
+    /// One of the app's own items: id, title, and shortcut. Shortcuts the page also handles
+    /// reach the page first, so these mostly show them and catch clicks.
+    Item(&'static str, &'static str, &'static str),
+    Separator,
+    Cut,
+    Copy,
+    Paste,
+    CloseWindow,
+}
+use Entry::{CloseWindow, Copy, Cut, Item, Paste, Separator};
+
+/// Every action has an item, so the menus are where its shortcut can be found. Items for
+/// another part of the app (the camera, the scanner, the crop and split editor) are off
+/// while it isn't showing, which is how one key can do different things in each.
+const MENUS: &[(&str, &[Entry])] = &[
+    (
+        "File",
+        &[
+            Item("new", "New Project", "CmdOrCtrl+N"),
+            Item("open", "Open Project…", "CmdOrCtrl+O"),
+            Separator,
+            CloseWindow,
+            Item("save", "Save Project", "CmdOrCtrl+S"),
+            Item("save-as", "Save As…", "CmdOrCtrl+Shift+S"),
+            Separator,
+            Item("export", "Export as PDF…", "CmdOrCtrl+E"),
+            Item("package", "Package…", "CmdOrCtrl+Alt+Shift+P"),
+        ],
+    ),
+    // Cut, Copy and Paste come first so that, in the range field (where the page lets ⌘C
+    // through), ⌘C copies rather than crops.
+    (
+        "Edit",
+        &[
+            Cut,
+            Copy,
+            Paste,
+            Separator,
+            Item("crop", "Crop Page…", "CmdOrCtrl+C"),
+            Item("split", "Split Page…", "CmdOrCtrl+/"),
+            Item("unsplit", "Join Split Pages", ""),
+            Separator,
+            Item("rotate-cw", "Rotate Page Clockwise", "CmdOrCtrl+R"),
+            Item("rotate-ccw", "Rotate Page Counter-clockwise", "CmdOrCtrl+Shift+R"),
+            Separator,
+            Item("move-back", "Move Page Back", "CmdOrCtrl+Left"),
+            Item("move-forward", "Move Page Forward", "CmdOrCtrl+Right"),
+            Item("move-up", "Move Page Up a Row", "CmdOrCtrl+Up"),
+            Item("move-down", "Move Page Down a Row", "CmdOrCtrl+Down"),
+            Separator,
+            Item("delete", "Delete Last Page", "Backspace"),
+        ],
+    ),
+    (
+        "Select",
+        &[
+            Item("select-all", "All", "CmdOrCtrl+A"),
+            Item("select-even", "Even", "CmdOrCtrl+Shift+A"),
+            Item("select-odd", "Odd", "CmdOrCtrl+Alt+A"),
+            Item("select-range", "Range…", "CmdOrCtrl+Ctrl+A"),
+            Separator,
+            Item("select-none", "None", "Escape"),
+            Separator,
+            Item("previous-page", "Previous Page", "Left"),
+            Item("next-page", "Next Page", "Right"),
+            Item("page-above", "Page Above", "Up"),
+            Item("page-below", "Page Below", "Down"),
+            Separator,
+            Item("extend-back", "Add Previous Page", "Shift+Left"),
+            Item("extend-forward", "Add Next Page", "Shift+Right"),
+        ],
+    ),
+    (
+        "Camera",
+        &[
+            Item("use-camera", "Use Camera", ""),
+            Separator,
+            Item("capture", "Capture Page", "Space"),
+            Separator,
+            Item("camera-cw", "Rotate Camera Clockwise", "R"),
+            Item("camera-ccw", "Rotate Camera Counter-clockwise", "Shift+R"),
+            Separator,
+            Item("loupe", "Show Magnifier", "L"),
+            Item("crop-mode", "Use Page Outline", "O"),
+            Item("crop-reset", "Reset Crop", ""),
+            Item("split-captures", "Split Each Capture", ""),
+        ],
+    ),
+    (
+        "Scanner",
+        &[
+            Item("use-scanner", "Use Scanner Folder", ""),
+            Separator,
+            Item("choose-folder", "Choose Folder…", ""),
+            Item("import", "Import Scans Already There", ""),
+            Item("redo-import", "Redo Import", ""),
+            Separator,
+            Item("add-page", "Add Page", "Enter"),
+            Item("discard-scans", "Discard Scans", ""),
+            Separator,
+            Item("next-scan", "Next Scan", "Tab"),
+            Item("previous-scan", "Previous Scan", "Shift+Tab"),
+            Item("snap", "Snap Scan into Place", "S"),
+            Item("difference", "Show Difference", "D"),
+            Item("turn-scan-left", "Turn Scan Left 0.1°", "["),
+            Item("turn-scan-right", "Turn Scan Right 0.1°", "]"),
+            Item("turn-scan-left-more", "Turn Scan Left 1°", "Shift+["),
+            Item("turn-scan-right-more", "Turn Scan Right 1°", "Shift+]"),
+            Separator,
+            Item("scanner-cw", "Rotate Pages Clockwise", "R"),
+            Item("scanner-ccw", "Rotate Pages Counter-clockwise", "Shift+R"),
+        ],
+    ),
+    (
+        "Crop & Split",
+        &[
+            Item("editor-apply", "Apply", "CmdOrCtrl+Enter"),
+            Item("editor-cancel", "Cancel", "Escape"),
+            Item("editor-reset", "Reset…", "CmdOrCtrl+Shift+R"),
+            Item("editor-preview", "Preview", "CmdOrCtrl+P"),
+            Separator,
+            Item("editor-previous", "Previous Page", "CmdOrCtrl+Left"),
+            Item("editor-next", "Next Page", "CmdOrCtrl+Right"),
+            Item("editor-pick-previous", "Pick Previous Page Too", "CmdOrCtrl+Shift+Left"),
+            Item("editor-pick-next", "Pick Next Page Too", "CmdOrCtrl+Shift+Right"),
+            Separator,
+            Item("editor-new-group", "New Group", "CmdOrCtrl+G"),
+            Item("editor-group-up", "Move to Group Above", "CmdOrCtrl+Up"),
+            Item("editor-group-down", "Move to Group Below", "CmdOrCtrl+Down"),
+            Item("editor-remove", "Leave Out of Edit", "Backspace"),
+            Separator,
+            Item("editor-rect", "Rectangle Crop", "R"),
+            Item("editor-outline", "Page Outline", "O"),
+            Item("editor-top-left", "Top-left Corner", "Q"),
+            Item("editor-top-right", "Top-right Corner", "W"),
+            Item("editor-bottom-right", "Bottom-right Corner", "S"),
+            Item("editor-bottom-left", "Bottom-left Corner", "A"),
+            Item("editor-next-point", "Next Point", "X"),
+            Item("editor-previous-point", "Previous Point", "Z"),
+            Separator,
+            Item("editor-split-top", "Gutter Top", "T"),
+            Item("editor-split-bottom", "Gutter Bottom", "B"),
+            Item("editor-split-line", "Whole Gutter", "L"),
+            Separator,
+            Item("editor-let-go", "Let Go", "Enter"),
+            Separator,
+            Item("editor-focus-image", "Work on the Image", "CmdOrCtrl+E"),
+            Item("editor-focus-toolbar", "Work in the Toolbar", "CmdOrCtrl+L"),
+            Item("editor-focus-sidebar", "Work in the Sidebar", "CmdOrCtrl+B"),
+        ],
+    ),
 ];
 
 /// The app's menu items by id, so the page can turn them on and off and retitle them.
@@ -296,20 +439,6 @@ struct MenuItems(HashMap<&'static str, MenuItem<Wry>>);
 
 fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, MenuItems)> {
     let mut items = HashMap::new();
-    let mut make = |list: &[(&'static str, &str, &str)]| -> tauri::Result<Vec<MenuItem<Wry>>> {
-        list.iter()
-            .map(|&(id, text, accel)| {
-                let builder = MenuItemBuilder::with_id(id, text);
-                let item = if accel.is_empty() { builder } else { builder.accelerator(accel) }.build(app)?;
-                items.insert(id, item.clone());
-                Ok(item)
-            })
-            .collect()
-    };
-    let file = make(FILE_MENU)?;
-    let edit = make(EDIT_MENU)?;
-    let select = make(SELECT_MENU)?;
-
     let app_menu = SubmenuBuilder::new(app, "Typo Scanner")
         .about(None)
         .separator()
@@ -321,32 +450,30 @@ fn build_menu(app: &tauri::App) -> tauri::Result<(Menu<Wry>, MenuItems)> {
         .separator()
         .quit()
         .build()?;
-    let file_menu = SubmenuBuilder::new(app, "File")
-        .items(&[&file[0], &file[1]])
-        .separator()
-        .close_window()
-        .items(&[&file[2], &file[3]])
-        .separator()
-        .items(&[&file[4], &file[5]])
-        .build()?;
-    // Cut, Copy and Paste come first so that, in the range field (where the page lets ⌘C
-    // through), ⌘C copies rather than crops.
-    let edit_menu = SubmenuBuilder::new(app, "Edit")
-        .cut()
-        .copy()
-        .paste()
-        .separator()
-        .items(&[&edit[0], &edit[1]])
-        .separator()
-        .items(&[&edit[2], &edit[3]])
-        .build()?;
-    let select_menu = SubmenuBuilder::new(app, "Select")
-        .items(&[&select[0], &select[1], &select[2], &select[3]])
-        .separator()
-        .item(&select[4])
-        .build()?;
+    let mut submenus = vec![app_menu];
+    for (title, entries) in MENUS {
+        let mut sub = SubmenuBuilder::new(app, *title);
+        for entry in *entries {
+            sub = match entry {
+                Item(id, text, accel) => {
+                    let builder = MenuItemBuilder::with_id(*id, *text);
+                    let item = if accel.is_empty() { builder } else { builder.accelerator(*accel) }.build(app)?;
+                    items.insert(*id, item.clone());
+                    sub.item(&item)
+                }
+                Separator => sub.separator(),
+                Cut => sub.cut(),
+                Copy => sub.copy(),
+                Paste => sub.paste(),
+                CloseWindow => sub.close_window(),
+            };
+        }
+        submenus.push(sub.build()?);
+    }
     let window_menu = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().fullscreen().build()?;
-    let menu = Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &select_menu, &window_menu])?;
+    submenus.push(window_menu);
+    let refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = submenus.iter().map(|s| s as &dyn tauri::menu::IsMenuItem<Wry>).collect();
+    let menu = Menu::with_items(app, &refs)?;
     Ok((menu, MenuItems(items)))
 }
 
@@ -376,6 +503,7 @@ pub fn run() {
             _ => PermissionResponse::Default,
         })
         .manage(Edited::default())
+        .manage(Opened::default())
         .setup(|app| {
             let (menu, items) = build_menu(app)?;
             app.set_menu(menu)?;
@@ -409,6 +537,7 @@ pub fn run() {
             write_file,
             pick_project,
             read_project,
+            take_opened,
             set_document,
             set_menu_state,
             confirm_discard,
@@ -418,19 +547,46 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
+        .run(|app, event| match event {
             // ⌘Q: ask about unsaved changes, as closing the window does.
-            if let RunEvent::ExitRequested { api, code: None, .. } = event {
+            RunEvent::ExitRequested { api, code: None, .. } => {
                 if hold_for_unsaved(app, |app| app.exit(0)) {
                     api.prevent_exit();
                 }
             }
+            // A project double-clicked (or dropped on the Dock icon) in the Finder.
+            #[cfg(target_os = "macos")]
+            RunEvent::Opened { urls } => {
+                let paths = urls
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .filter(|path| has_extension(path, PROJECT_EXTENSION))
+                    .map(|path| path.display().to_string());
+                app.state::<Opened>().0.lock().unwrap().extend(paths);
+                let _ = app.emit("opened", ());
+            }
+            _ => {}
         });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_shortcuts_parse_and_ids_are_unique() {
+        let mut ids = std::collections::HashSet::new();
+        for (_, entries) in MENUS {
+            for entry in *entries {
+                if let Item(id, _, accel) = entry {
+                    assert!(ids.insert(*id), "{id} is used twice");
+                    if !accel.is_empty() {
+                        accel.parse::<muda::accelerator::Accelerator>().unwrap_or_else(|e| panic!("{id}: {accel}: {e}"));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn lists_only_scans_and_converts_tiff() {

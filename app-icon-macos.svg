@@ -11,19 +11,19 @@
       <feOffset dy="10"/>
       <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
     </filter>
-    <linearGradient id="left-gutter" gradientUnits="userSpaceOnUse" x1="1665.26" y1="1464.43" x2="1707.8" y2="1464.43" gradientTransform="translate(-1588.9445 2928.8584) scale(1 -1)"><stop offset=".17" stop-color="#8e0069"/><stop offset=".21" stop-color="#9a1c79"/><stop offset=".3" stop-color="#b15098"/><stop offset=".39" stop-color="#c67fb4"/><stop offset=".48" stop-color="#d7a6cb"/><stop offset=".57" stop-color="#e6c6dd"/><stop offset=".67" stop-color="#f1dfec"/><stop offset=".77" stop-color="#f8f1f6"/><stop offset=".87" stop-color="#fdfbfd"/><stop offset="1" stop-color="#fff"/></linearGradient>
-    <linearGradient id="right-gutter" gradientUnits="userSpaceOnUse" x1="138.71" y1="1464.43" x2="180.57" y2="1464.43"><stop offset=".17" stop-color="#8e0069"/><stop offset=".21" stop-color="#9a1c79"/><stop offset=".3" stop-color="#b15098"/><stop offset=".39" stop-color="#c67fb4"/><stop offset=".48" stop-color="#d7a6cb"/><stop offset=".57" stop-color="#e6c6dd"/><stop offset=".67" stop-color="#f1dfec"/><stop offset=".77" stop-color="#f8f1f6"/><stop offset=".87" stop-color="#fdfbfd"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <linearGradient id="left-gutter" gradientUnits="userSpaceOnUse" x1="1661.26" y1="127.76" x2="1703.8" y2="127.76" gradientTransform="translate(-1580.9445 255.5151) scale(1 -1)"><stop offset=".17" stop-color="#8e0069"/><stop offset=".21" stop-color="#9a1c79"/><stop offset=".3" stop-color="#b15098"/><stop offset=".39" stop-color="#c67fb4"/><stop offset=".48" stop-color="#d7a6cb"/><stop offset=".57" stop-color="#e6c6dd"/><stop offset=".67" stop-color="#f1dfec"/><stop offset=".77" stop-color="#f8f1f6"/><stop offset=".87" stop-color="#fdfbfd"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <linearGradient id="right-gutter" gradientUnits="userSpaceOnUse" x1="134.71" y1="127.76" x2="176.57" y2="127.76"><stop offset=".17" stop-color="#8e0069"/><stop offset=".21" stop-color="#9a1c79"/><stop offset=".3" stop-color="#b15098"/><stop offset=".39" stop-color="#c67fb4"/><stop offset=".48" stop-color="#d7a6cb"/><stop offset=".57" stop-color="#e6c6dd"/><stop offset=".67" stop-color="#f1dfec"/><stop offset=".77" stop-color="#f8f1f6"/><stop offset=".87" stop-color="#fdfbfd"/><stop offset="1" stop-color="#fff"/></linearGradient>
   </defs>
   <use href="#squircle" filter="url(#shadow)"/>
   <g clip-path="url(#shape)">
-    <g transform="translate(100 100) scale(3.21875) translate(0 -1336.67)">
-      <rect y="1336.67" width="256" height="256" fill="#8e0069"/>
-      <rect x="12.17" y="1384.42" width="106.68" height="160.03" fill="#fff"/>
-      <rect x="138.71" y="1384.42" width="106.68" height="160.03" fill="#fff"/>
-      <rect x="138.71" y="1384.42" width="41.85" height="160.03" fill="url(#right-gutter)"/>
-      <rect x="76.32" y="1384.42" width="42.54" height="160.03" fill="url(#left-gutter)" transform="translate(195.1681 2928.8584) rotate(-180)"/>
-      <rect x="12.17" y="1384.42" width="106.68" height="160.03" fill="none" stroke="#fff" stroke-miterlimit="10"/>
-      <rect x="138.71" y="1384.42" width="106.68" height="160.03" fill="none" stroke="#fff" stroke-miterlimit="10"/>
+    <g transform="translate(100 100) scale(3.21875)">
+      <rect width="256" height="256" fill="#8e0069"/>
+      <rect x="16.17" y="47.74" width="106.68" height="160.03" fill="#fff"/>
+      <rect x="134.71" y="47.74" width="106.68" height="160.03" fill="#fff"/>
+      <rect x="134.71" y="47.74" width="41.85" height="160.03" fill="url(#right-gutter)"/>
+      <rect x="80.32" y="47.74" width="42.54" height="160.03" fill="url(#left-gutter)" transform="translate(203.17 255.52) rotate(-180)"/>
+      <rect x="16.17" y="47.74" width="106.68" height="160.03" fill="none" stroke="#fff" stroke-miterlimit="10" stroke-width="2"/>
+      <rect x="134.71" y="47.74" width="106.68" height="160.03" fill="none" stroke="#fff" stroke-miterlimit="10" stroke-width="2"/>
     </g>
   </g>
 </svg>

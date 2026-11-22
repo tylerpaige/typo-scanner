@@ -1,5 +1,6 @@
 import { CropBox, HANDLES, fitFrame } from "./cropbox";
 import { FULL } from "./geometry";
+import { menuPart, refreshMenu } from "./menu";
 import { outlineFromRect, type Crop, type Outline } from "./outline";
 import { OutlineBox, type Anchor } from "./outlinebox";
 import { render } from "./render";
@@ -146,6 +147,7 @@ function renderScope() {
   applyButton.textContent = pages.length === 1 ? (tool === "split" ? "Split" : "Apply") : `${verb} ${left} page${left === 1 ? "" : "s"}`;
   applyButton.disabled = left === 0;
   renderSidebar();
+  refreshMenu();
 }
 
 // ---- the sidebar: pages in groups ----
@@ -476,15 +478,16 @@ function confirmReset() {
 /** Keys that work wherever the focus is in the dialog. Returns whether it used the key. */
 function commandKey(e: KeyboardEvent): boolean {
   if (!(e.metaKey || e.ctrlKey)) return false;
-  const inSidebar = focusIn(sidebar) && !sidebar.hidden;
   if (e.code === "KeyE") viewport.focus();
   else if (e.code === "KeyL") focusToolbar();
   else if (e.code === "KeyB" && !sidebar.hidden) sidebar.focus();
   else if (e.key === "Enter") applyButton.disabled || close(true);
   else if (e.code === "KeyR" && e.shiftKey) confirmReset();
   else if (e.code === "KeyP") tool === "crop" && togglePreview();
-  else if (e.code === "KeyG" && inSidebar) newGroup(chosenPages());
-  else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && inSidebar) shiftGroup(e.key === "ArrowUp" ? -1 : 1);
+  else if (e.code === "KeyG" && !sidebar.hidden) newGroup(chosenPages());
+  else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !sidebar.hidden) shiftGroup(e.key === "ArrowUp" ? -1 : 1);
+  // Moves between pages from anywhere, even a slider or menu, or with a corner or part to move.
+  else if (e.key === "ArrowLeft" || e.key === "ArrowRight") step(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
   else return e.code === "KeyR"; // ⌘R alone would reload the page
   return true;
 }
@@ -500,6 +503,10 @@ function arrowStep(e: KeyboardEvent): [number, number] | null {
 function stageKey(e: KeyboardEvent): boolean {
   const key = e.key.toLowerCase();
   const by = arrowStep(e);
+  if (e.key === "Enter") {
+    letGo();
+    return true;
+  }
   if (tool === "split") {
     const part = ({ t: "top", b: "bottom", l: "line" } as const)[key as "t" | "b" | "l"];
     if (part && !e.shiftKey) splitBox.setActive(part);
@@ -512,27 +519,16 @@ function stageKey(e: KeyboardEvent): boolean {
   if (previewing) return false;
   const outline = modeSelect.value === "outline";
   if (key === "r" || key === "o") {
-    setMode(key === "r" ? "rect" : "outline");
-    commit();
-    refresh();
+    switchMode(key === "r" ? "rect" : "outline");
     return true;
   }
   const corner = "qwsa".indexOf(key); // clockwise from the top-left, as they sit on the keyboard
   if (corner >= 0 && !e.shiftKey) {
-    if (outline) outlineBox.setActive({ corner });
-    else rectBox.setActive(["nw", "ne", "se", "sw"][corner]);
+    pickCorner(corner);
     return true;
   }
   if ((key === "z" || key === "x") && !e.shiftKey) {
-    const by = key === "x" ? 1 : -1; // x goes clockwise, z back
-    if (outline) {
-      const ring = outlineBox.anchors();
-      const at = ring.findIndex((a) => sameAnchor(a, outlineBox.active));
-      outlineBox.setActive(ring[at < 0 ? 0 : (at + by + ring.length) % ring.length]);
-    } else {
-      const at = HANDLES.indexOf(rectBox.active ?? "");
-      rectBox.setActive(HANDLES[at < 0 ? 0 : (at + by + HANDLES.length) % HANDLES.length]);
-    }
+    nextPoint(key === "x" ? 1 : -1); // x goes clockwise, z back
     return true;
   }
   const box = outline ? outlineBox : rectBox;
@@ -542,6 +538,37 @@ function stageKey(e: KeyboardEvent): boolean {
     return true;
   }
   return false;
+}
+
+/** Lets go of the corner or part, so the arrow keys move between pages again. */
+function letGo() {
+  splitBox.setActive(null);
+  rectBox.setActive(null);
+  outlineBox.setActive(null);
+}
+
+function switchMode(mode: Crop["kind"]) {
+  setMode(mode);
+  commit();
+  refresh();
+}
+
+/** Picks a corner to move, numbered clockwise from the top-left. */
+function pickCorner(corner: number) {
+  if (modeSelect.value === "outline") outlineBox.setActive({ corner });
+  else rectBox.setActive(["nw", "ne", "se", "sw"][corner]);
+}
+
+/** Picks the next point to move, clockwise (or back, with -1). */
+function nextPoint(by: 1 | -1) {
+  if (modeSelect.value === "outline") {
+    const ring = outlineBox.anchors();
+    const at = ring.findIndex((a) => sameAnchor(a, outlineBox.active));
+    outlineBox.setActive(ring[at < 0 ? 0 : (at + by + ring.length) % ring.length]);
+  } else {
+    const at = HANDLES.indexOf(rectBox.active ?? "");
+    rectBox.setActive(HANDLES[at < 0 ? 0 : (at + by + HANDLES.length) % HANDLES.length]);
+  }
 }
 
 const sameAnchor = (a: Anchor, b: Anchor | null) =>
@@ -569,17 +596,106 @@ dialog.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     e.preventDefault();
     step(e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
-  } else if ((e.key === "Backspace" || e.key === "Delete") && focusIn(sidebar) && !sidebar.hidden) {
+  } else if ((e.key === "Backspace" || e.key === "Delete") && !sidebar.hidden) {
     e.preventDefault();
     removeChosen();
-  } else if (e.key === "Enter") {
-    if (applyButton.disabled) return;
+  } else if (e.key === "Escape") {
+    // Handled here, not left to the dialog, so the menu's Cancel doesn't act on it as well.
     e.preventDefault();
-    close(true);
+    escape();
   }
 });
 
-// Esc cancels the edit, but first takes back a question being asked.
+/** Esc cancels the edit, but first takes back a question being asked. */
+function escape() {
+  if (armed) disarm();
+  else close(false);
+}
+
+menuPart(() => {
+  const open = dialog.open;
+  const crop = open && tool === "crop";
+  const shaping = crop && !previewing;
+  const split = open && tool === "split";
+  const several = open && order().length > 1;
+  const grouping = open && !sidebar.hidden;
+  const active = open && !!(rectBox.active || outlineBox.active || splitBox.active);
+  return {
+    enabled: {
+      "editor-apply": open && !applyButton.disabled,
+      "editor-cancel": open,
+      "editor-reset": open,
+      "editor-preview": crop,
+      "editor-previous": several,
+      "editor-next": several,
+      "editor-pick-previous": several,
+      "editor-pick-next": several,
+      "editor-new-group": grouping,
+      "editor-group-up": grouping,
+      "editor-group-down": grouping,
+      "editor-remove": grouping && chosenPages().length > 0,
+      "editor-rect": shaping,
+      "editor-outline": shaping,
+      "editor-top-left": shaping,
+      "editor-top-right": shaping,
+      "editor-bottom-right": shaping,
+      "editor-bottom-left": shaping,
+      "editor-next-point": shaping,
+      "editor-previous-point": shaping,
+      "editor-split-top": split,
+      "editor-split-bottom": split,
+      "editor-split-line": split,
+      "editor-let-go": active,
+      "editor-focus-image": open,
+      "editor-focus-toolbar": open,
+      "editor-focus-sidebar": grouping,
+    },
+    titles: {
+      "editor-apply": applyButton.textContent ?? "Apply",
+      "editor-preview": previewing ? "Stop Previewing" : "Preview",
+    },
+  };
+});
+
+const menuActions: Record<string, () => unknown> = {
+  "editor-apply": () => applyButton.disabled || close(true),
+  "editor-cancel": escape,
+  "editor-reset": confirmReset,
+  "editor-preview": togglePreview,
+  "editor-previous": () => step(-1),
+  "editor-next": () => step(1),
+  "editor-pick-previous": () => step(-1, true),
+  "editor-pick-next": () => step(1, true),
+  "editor-new-group": () => newGroup(chosenPages()),
+  "editor-group-up": () => shiftGroup(-1),
+  "editor-group-down": () => shiftGroup(1),
+  "editor-remove": removeChosen,
+  "editor-rect": () => switchMode("rect"),
+  "editor-outline": () => switchMode("outline"),
+  "editor-top-left": () => pickCorner(0),
+  "editor-top-right": () => pickCorner(1),
+  "editor-bottom-right": () => pickCorner(2),
+  "editor-bottom-left": () => pickCorner(3),
+  "editor-next-point": () => nextPoint(1),
+  "editor-previous-point": () => nextPoint(-1),
+  "editor-split-top": () => splitBox.setActive("top"),
+  "editor-split-bottom": () => splitBox.setActive("bottom"),
+  "editor-split-line": () => splitBox.setActive("line"),
+  "editor-let-go": letGo,
+  "editor-focus-image": () => viewport.focus(),
+  "editor-focus-toolbar": focusToolbar,
+  "editor-focus-sidebar": () => sidebar.hidden || sidebar.focus(),
+};
+
+/** Does what the menu item `id` says, if it's the editor's and the editor is open. Returns whether it did. */
+export function editorAction(id: string): boolean {
+  const action = dialog.open && menuActions[id];
+  if (!action) return false;
+  action();
+  return true;
+}
+
+// Esc in a menu or slider still reaches the dialog; it too first takes back a question being asked.
 dialog.addEventListener("cancel", (e) => {
   if (!armed) return;
   e.preventDefault();
