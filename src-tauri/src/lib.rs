@@ -123,7 +123,7 @@ fn upright_jpeg(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 fn heic_to_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     static COUNT: AtomicU32 = AtomicU32::new(0);
     let out = std::env::temp_dir().join(format!(
-        "webcam-document-scanner-{}-{}.jpg",
+        "typo-scanner-{}-{}.jpg",
         std::process::id(),
         COUNT.fetch_add(1, Ordering::Relaxed)
     ));

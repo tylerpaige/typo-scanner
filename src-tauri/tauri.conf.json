@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Webcam Document Scanner",
+  "productName": "Typo Scanner",
   "version": "0.1.0",
-  "identifier": "codes.typo.webcam-document-scanner",
+  "identifier": "codes.typo.typo-scanner",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5175",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Webcam Document Scanner",
+        "title": "Typo Scanner",
         "width": 1200,
         "height": 850,
         "minWidth": 720,

@@ -1,5 +1,5 @@
 [package]
-name = "webcam-document-scanner"
+name = "typo-scanner"
 version = "0.1.0"
 description = "Photograph pages with a webcam or iPhone and save them as a PDF"
 authors = ["Tyler Paige"]
