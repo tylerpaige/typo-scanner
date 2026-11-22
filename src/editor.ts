@@ -589,8 +589,12 @@ dialog.addEventListener("keydown", (e) => {
   // Controls keep their own keys.
   if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement) return;
   if (t instanceof HTMLButtonElement && (e.key === "Enter" || e.key === " ")) return;
-  if (focusIn(viewport) && !e.metaKey && !e.ctrlKey && !e.altKey && stageKey(e)) {
+  // The letters that pick a corner or part work from anywhere, and bring the focus to the image
+  // so the arrow keys then move what they picked; arrows and Enter elsewhere keep their own meaning.
+  const letter = /^[a-z]$/i.test(e.key);
+  if ((letter || focusIn(viewport)) && !e.metaKey && !e.ctrlKey && !e.altKey && stageKey(e)) {
     e.preventDefault();
+    viewport.focus();
     return;
   }
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -672,20 +676,26 @@ const menuActions: Record<string, () => unknown> = {
   "editor-remove": removeChosen,
   "editor-rect": () => switchMode("rect"),
   "editor-outline": () => switchMode("outline"),
-  "editor-top-left": () => pickCorner(0),
-  "editor-top-right": () => pickCorner(1),
-  "editor-bottom-right": () => pickCorner(2),
-  "editor-bottom-left": () => pickCorner(3),
-  "editor-next-point": () => nextPoint(1),
-  "editor-previous-point": () => nextPoint(-1),
-  "editor-split-top": () => splitBox.setActive("top"),
-  "editor-split-bottom": () => splitBox.setActive("bottom"),
-  "editor-split-line": () => splitBox.setActive("line"),
+  // As with their keys, picking a corner or part brings the focus to the image, for the arrow keys.
+  "editor-top-left": () => onImage(() => pickCorner(0)),
+  "editor-top-right": () => onImage(() => pickCorner(1)),
+  "editor-bottom-right": () => onImage(() => pickCorner(2)),
+  "editor-bottom-left": () => onImage(() => pickCorner(3)),
+  "editor-next-point": () => onImage(() => nextPoint(1)),
+  "editor-previous-point": () => onImage(() => nextPoint(-1)),
+  "editor-split-top": () => onImage(() => splitBox.setActive("top")),
+  "editor-split-bottom": () => onImage(() => splitBox.setActive("bottom")),
+  "editor-split-line": () => onImage(() => splitBox.setActive("line")),
   "editor-let-go": letGo,
   "editor-focus-image": () => viewport.focus(),
   "editor-focus-toolbar": focusToolbar,
   "editor-focus-sidebar": () => sidebar.hidden || sidebar.focus(),
 };
+
+function onImage(pick: () => void) {
+  pick();
+  viewport.focus();
+}
 
 /** Does what the menu item `id` says, if it's the editor's and the editor is open. Returns whether it did. */
 export function editorAction(id: string): boolean {
